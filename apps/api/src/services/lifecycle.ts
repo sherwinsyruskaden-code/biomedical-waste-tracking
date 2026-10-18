@@ -61,7 +61,8 @@ export const actionBodies = {
   segregate: z.object({
     confirmSegregation: z.literal(true, { message: "Confirm that segregation was checked" }),
     notes: z.string().trim().max(2000).optional(),
-    scanMethod: z.enum(scanMethodEnum.enumValues).default("manual"),
+    /** Optional: present when the checker scanned a label while verifying. */
+    scanMethod: z.enum(scanMethodEnum.enumValues).optional(),
   }),
   cancel: z.object({ reason: z.string().trim().min(3, "A reason is required").max(2000) }),
   pickup: z.object(scanFields),

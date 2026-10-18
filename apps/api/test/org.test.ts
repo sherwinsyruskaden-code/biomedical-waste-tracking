@@ -105,3 +105,17 @@ describe("roles and team management", () => {
     expect(actions).toContain("batch.create");
   });
 });
+
+describe("invitation while signed in as someone else", () => {
+  it("signs the browser in as the new invitee instead of attaching them to the current session", async () => {
+    const x = await signupOrg("Inviter");
+    const inv = await x.admin.post("/api/invitations", { email: `newbie-${uniq()}@x.test`, role: "transporter" });
+    const token = inv.body.link.split("/invite/")[1];
+    // The admin's own browser opens the link and creates the new account
+    const r = await x.admin.post("/api/invitations/accept", { token, fullName: "New Bie", password: PASSWORD, acceptTerms: true });
+    expect(r.status).toBe(200);
+    const me = await x.admin.get("/api/auth/me");
+    expect(me.body.membership.role).toBe("transporter");
+    expect(me.body.user.fullName).toBe("New Bie");
+  });
+});

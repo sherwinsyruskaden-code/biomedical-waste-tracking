@@ -165,6 +165,7 @@ route(router, base, { method: "get", path: "/batches", summary: "Search and filt
       collectionDueAt: wasteBatches.collectionDueAt,
       currentAssignmentId: wasteBatches.currentAssignmentId,
       originFacilityId: wasteBatches.originFacilityId,
+      destinationFacilityId: wasteBatches.destinationFacilityId,
       category: { id: wasteCategories.id, code: wasteCategories.code, name: wasteCategories.name, colorHex: wasteCategories.colorHex },
       originName: origin.name,
       destinationName: dest.name,

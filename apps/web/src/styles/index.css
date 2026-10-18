@@ -1,0 +1,96 @@
+@import "tailwindcss";
+@import "@fontsource-variable/bricolage-grotesque";
+@import "@fontsource-variable/instrument-sans";
+@import "leaflet/dist/leaflet.css";
+
+/*
+  BWTS design tokens
+  ink      #0E1B15  deep green-black text
+  paper    #FFFFFF  surfaces
+  mist     #F2F6F3  app canvas (barely-green white)
+  emerald  #059669  brand / primary actions
+  lime     #C6F432  "live" and the scan action — used sparingly
+  signal   #0891B2  tracking & analytics (cyan)
+*/
+@theme {
+  --font-display: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+
+  --color-ink: #0e1b15;
+  --color-ink-2: #3c4a43;
+  --color-ink-3: #6b7a72;
+  --color-line: #dfe7e2;
+  --color-line-2: #c9d5ce;
+  --color-mist: #f2f6f3;
+  --color-paper: #ffffff;
+
+  --color-emerald-50: #ecfdf5;
+  --color-emerald-100: #d1fae5;
+  --color-emerald-200: #a7f3d0;
+  --color-emerald-500: #10b981;
+  --color-emerald-600: #059669;
+  --color-emerald-700: #047857;
+  --color-emerald-800: #065f46;
+  --color-emerald-900: #064e3b;
+
+  --color-lime: #c6f432;
+  --color-lime-soft: #f0fcc8;
+  --color-lime-deep: #8fb80d;
+
+  --color-signal: #0891b2;
+  --color-signal-soft: #e0f6fb;
+  --color-signal-deep: #0e7490;
+
+  --color-warn: #d97706;
+  --color-warn-soft: #fef3c7;
+  --color-danger: #e11d48;
+  --color-danger-soft: #ffe4e9;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+
+  --shadow-lift: 0 1px 0 rgb(14 27 21 / 0.04), 0 8px 24px -12px rgb(6 95 70 / 0.25);
+  --shadow-pop: 0 2px 0 rgb(14 27 21 / 0.06), 0 18px 40px -16px rgb(6 95 70 / 0.35);
+
+  --animate-pulse-ring: pulse-ring 1.8s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.6); opacity: 0.7; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-mist text-ink font-sans antialiased;
+    font-size: 15px;
+    line-height: 1.55;
+    font-feature-settings: "ss01";
+  }
+  h1, h2, h3, h4 { @apply font-display text-ink; letter-spacing: -0.02em; line-height: 1.15; }
+  :focus-visible { outline: 2.5px solid var(--color-emerald-600); outline-offset: 2px; border-radius: 6px; }
+  ::selection { background: var(--color-lime); color: var(--color-ink); }
+  .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
+}
+
+/* Leaflet tweaks to match the app */
+.leaflet-container { font-family: var(--font-sans); background: #e8efe9; }
+.leaflet-popup-content-wrapper { border-radius: 12px; box-shadow: var(--shadow-pop); }
+.leaflet-control-attribution { font-size: 10px; }
+
+/* Print: QR label sheets */
+@media print {
+  body { background: white; }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  .label-sheet { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8mm; }
+  .label-card { break-inside: avoid; border: 1.5px solid #000 !important; box-shadow: none !important; }
+}
+.print-only { display: none; }

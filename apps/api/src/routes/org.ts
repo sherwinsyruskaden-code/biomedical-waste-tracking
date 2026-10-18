@@ -341,7 +341,8 @@ route(router, base, {
     }
     await tx.update(invitations).set({ acceptedAt: new Date() }).where(eq(invitations.id, inv.id));
     await audit({ organizationId: inv.organizationId, actorUserId: user.id, action: "invitation.accept", entityType: "membership", entityId: m.id, ip: ctx.req.ip }, tx);
-    if (ctx.req.auth?.sessionId) await tx.update(sessions).set({ activeOrganizationId: inv.organizationId }).where(eq(sessions.id, ctx.req.auth.sessionId));
+    // Reuse the session only if it already belongs to the invitee; otherwise sign in as the invitee.
+    if (ctx.req.auth?.user.id === user.id) await tx.update(sessions).set({ activeOrganizationId: inv.organizationId }).where(eq(sessions.id, ctx.req.auth.sessionId));
     else await createSession(ctx.res, ctx.req, user.id, inv.organizationId, tx);
     return { organizationId: inv.organizationId };
   }).catch((e) => {
