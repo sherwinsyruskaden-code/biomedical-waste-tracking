@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vite/
+apps/web/test-results/
+apps/web/playwright-report/
+storage/
+backups/*.sql
+backups/*.dump
