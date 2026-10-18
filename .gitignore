@@ -13,4 +13,4 @@ apps/web/playwright-report/
 storage/
 backups/*.sql
 backups/*.dump
-e2e/screenshots/
+apps/web/e2e/screenshots/

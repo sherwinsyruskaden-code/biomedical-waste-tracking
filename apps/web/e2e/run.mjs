@@ -80,6 +80,16 @@ const api = (page) => ({
   post: (url, data) => page.evaluate(async ([u, d]) => (await fetch(u, { method: "POST", headers: { "content-type": "application/json", "x-bwts-csrf": "1" }, body: JSON.stringify(d) })).status, [url, data]),
 });
 
+/** Waits for a success toast; on failure reports what the dialog is showing instead. */
+async function expectToast(page, text, dialog) {
+  try {
+    await page.getByText(text, { exact: true }).first().waitFor({ timeout: 15000 });
+  } catch (e) {
+    const shown = dialog ? await dialog.innerText().catch(() => "(dialog closed)") : "";
+    throw new Error(`No "${text}" confirmation. Dialog shows: ${shown.slice(0, 300)}`);
+  }
+}
+
 async function acceptInvite(link, name) {
   const u = await newUser();
   await u.page.goto(new URL(link).pathname);
@@ -262,13 +272,13 @@ try {
     let d = p.getByRole("dialog");
     await d.getByLabel("Weighed quantity").fill("14.4");
     await d.getByRole("button", { name: "Confirm receipt" }).click();
-    await d.waitFor({ state: "detached" });
+    await expectToast(p, "Receipt recorded", d);
     await p.goto("/receiving?tab=received");
     await p.getByRole("button", { name: "Record disposal" }).first().click();
     d = p.getByRole("dialog");
     await d.getByLabel("Plant log / document reference").fill(`E2E-${run}`);
     await d.getByRole("button", { name: "Record disposal" }).click();
-    await d.waitFor({ state: "detached" });
+    await expectToast(p, "Disposal recorded", d);
   });
 
   await check("13. The complete lifecycle history is shown on the batch", async () => {

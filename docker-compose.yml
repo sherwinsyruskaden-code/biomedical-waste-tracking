@@ -1,0 +1,45 @@
+# Local services for BWTS.
+#
+#   docker compose up -d db          # just PostgreSQL (use with `npm run dev`)
+#   docker compose --profile full up -d --build   # PostgreSQL + the production app on http://localhost:4000
+#
+# Database files live in the named volume "bwts-pgdata", which survives `docker compose down`
+# and container rebuilds. Only `docker compose down -v` deletes it.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bwts
+      POSTGRES_PASSWORD: bwts_dev_password
+      POSTGRES_DB: bwts
+    ports:
+      - "5432:5432"
+    volumes:
+      - bwts-pgdata:/var/lib/postgresql/data
+      - ./docker/create-test-db.sql:/docker-entrypoint-initdb.d/01-create-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bwts -d bwts"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    profiles: ["full"]
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://bwts:bwts_dev_password@db:5432/bwts
+      APP_URL: http://localhost:4000
+      PORT: "4000"
+      DEMO_MODE: "true"
+      COOKIE_SECURE: "false"
+      # SMTP_HOST / SMTP_USER / SMTP_PASS / SMTP_FROM: set to send real emails
+    ports:
+      - "4000:4000"
+
+volumes:
+  bwts-pgdata:
