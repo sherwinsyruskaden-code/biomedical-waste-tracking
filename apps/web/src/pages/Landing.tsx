@@ -6,6 +6,7 @@ import { Link } from "react-router";
 import { Logo } from "../components/AppShell";
 import { useMe } from "../lib/session";
 import { DemoLogin } from "../components/DemoLogin";
+import { GlobeVisual } from "../components/GlobeVisual";
 
 const stages = [
   { key: "generated", title: "Generated", who: "Hospital staff", records: "Category, weight, ward, container count. A QR label is printed for every container." },
@@ -24,7 +25,7 @@ function CustodyRail() {
   const reduce = useReducedMotion();
   const s = stages[active];
   return (
-    <div className="rounded-[24px] border border-line bg-paper p-5 shadow-lift md:p-7">
+    <div className="rounded-[24px] border border-line bg-paper/72 p-5 shadow-lift backdrop-blur-md md:p-7">
       <div className="flex items-center justify-between">
         <p className="font-display text-[15px] font-semibold text-ink">How one batch moves</p>
         <span className="text-[12.5px] text-ink-3">Tap a stage</span>
@@ -129,7 +130,8 @@ export default function Landing() {
         </nav>
       </header>
 
-      <section className="mx-auto grid max-w-[1200px] items-center gap-10 px-5 pb-16 pt-6 md:px-8 lg:grid-cols-[1.05fr_1fr] lg:gap-14 lg:pb-24 lg:pt-12">
+      <div className="relative overflow-hidden">
+      <section className="relative mx-auto grid max-w-[1200px] items-center gap-10 px-5 pb-16 pt-6 md:px-8 lg:grid-cols-[1.05fr_1fr] lg:gap-14 lg:pb-24 lg:pt-12">
         <motion.div initial={reduceMotion ? false : { opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: [0.22, 0.8, 0.3, 1] }}>
           <h1 className="text-[44px] font-extrabold leading-[1.02] tracking-[-0.035em] md:text-[64px]">
             Every bag of biomedical waste, accounted for until it's destroyed.
@@ -153,10 +155,14 @@ export default function Landing() {
             </p>
           )}
         </motion.div>
-        <Tilt>
-          <CustodyRail />
-        </Tilt>
+        <div className="relative">
+          <GlobeVisual className="absolute left-1/2 top-1/2 hidden -translate-x-1/2 -translate-y-1/2 scale-[1.9] lg:block" />
+          <Tilt>
+            <CustodyRail />
+          </Tilt>
+        </div>
       </section>
+      </div>
 
       <section id="demo" className="mx-auto max-w-[1200px] px-5 pb-16 md:px-8">
         <DemoLogin variant="landing" />

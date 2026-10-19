@@ -14,7 +14,8 @@
     "test:e2e:dates": "node e2e/dates.mjs",
     "test:e2e:motion": "node e2e/motion.mjs",
     "test:e2e:workflow": "node e2e/workflow.mjs",
-    "test:e2e:registration": "node e2e/registration.mjs"
+    "test:e2e:registration": "node e2e/registration.mjs",
+    "test:e2e:visual": "node e2e/visual.mjs"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

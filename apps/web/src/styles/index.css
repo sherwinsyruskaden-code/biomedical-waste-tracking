@@ -76,6 +76,40 @@
   .animate-rise-in { animation: rise-in 0.28s ease-out; } /* no fill-mode: a lingering transform would trap fixed-position children */
 }
 
+/* ---- Premium polish layer: short (150-300 ms) motion, all gated by prefers-reduced-motion ---- */
+@keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes overlay-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes dialog-in { from { opacity: 0; transform: scale(0.96) translateY(6px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+@keyframes dialog-out { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(0.97); } }
+@keyframes drawer-in { from { opacity: 0.6; transform: translateX(28px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes drawer-out { from { opacity: 1; transform: translateX(0); } to { opacity: 0.6; transform: translateX(28px); } }
+@keyframes menu-in { from { opacity: 0; transform: translateY(-4px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes menu-out { from { opacity: 1; } to { opacity: 0; transform: scale(0.97); } }
+@keyframes rail-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes node-pop { from { transform: scale(0.4); opacity: 0; } 70% { transform: scale(1.12); } to { transform: scale(1); opacity: 1; } }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes globe-spin { from { transform: rotateY(0deg); } to { transform: rotateY(360deg); } }
+@keyframes drift { 0%, 100% { transform: translate3d(0, 0, 0); } 50% { transform: translate3d(0, -14px, 0); } }
+
+@media (prefers-reduced-motion: no-preference) {
+  .fx-overlay[data-state="open"] { animation: overlay-in 0.18s ease-out; }
+  .fx-overlay[data-state="closed"] { animation: overlay-out 0.14s ease-in; }
+  .fx-dialog[data-state="open"] { animation: dialog-in 0.22s cubic-bezier(0.2, 0.8, 0.3, 1); }
+  .fx-dialog[data-state="closed"] { animation: dialog-out 0.14s ease-in; }
+  .fx-drawer[data-state="open"] { animation: drawer-in 0.24s cubic-bezier(0.2, 0.8, 0.3, 1); }
+  .fx-drawer[data-state="closed"] { animation: drawer-out 0.16s ease-in; }
+  .fx-menu[data-state="open"] { animation: menu-in 0.16s cubic-bezier(0.2, 0.8, 0.3, 1); transform-origin: var(--radix-dropdown-menu-content-transform-origin, top right); }
+  .fx-menu[data-state="closed"] { animation: menu-out 0.1s ease-in; }
+  .fx-rail-fill { transform-origin: left center; animation: rail-grow 0.6s cubic-bezier(0.3, 0.7, 0.3, 1) both; }
+  .fx-node { animation: node-pop 0.36s cubic-bezier(0.2, 0.8, 0.3, 1) both; }
+  .fx-skeleton { background-image: linear-gradient(100deg, transparent 30%, rgb(255 255 255 / 0.65) 50%, transparent 70%); background-size: 200% 100%; animation: shimmer 1.6s linear infinite; }
+  .fx-globe-spin { animation: globe-spin 48s linear infinite; }
+  .fx-drift { animation: drift 9s ease-in-out infinite; }
+}
+/* Elevation: a hairline plus a soft green-tinted shadow; cards that are links or buttons lift on hover via .lift */
+.fx-surface { box-shadow: 0 1px 0 rgb(14 27 21 / 0.03), 0 6px 18px -14px rgb(6 95 70 / 0.35); }
+.fx-glow { box-shadow: 0 0 0 4px rgb(198 244 50 / 0.28); }
+
 @keyframes pulse-ring {
   0% { transform: scale(0.6); opacity: 0.7; }
   100% { transform: scale(2.2); opacity: 0; }

@@ -23,10 +23,12 @@ function CustodyRail({ b }: { b: Detail }) {
           const current = !off && i === reached && s !== "disposed";
           return (
             <li key={s} className="relative flex flex-1 flex-col items-center gap-2 text-center">
-              {i > 0 && <span className={clsx("absolute right-1/2 top-[11px] h-[3px] w-full", i <= reached ? "bg-emerald-600" : "bg-line")} aria-hidden />}
+              {i > 0 && <span className={clsx("absolute right-1/2 top-[11px] h-[3px] w-full", i <= reached ? "fx-rail-fill bg-emerald-600" : "bg-line")} style={{ animationDelay: `${i * 70}ms` }} aria-hidden />}
               <span
+                style={{ animationDelay: `${i * 70}ms` }}
                 className={clsx(
-                  "relative z-10 grid size-6 place-items-center rounded-full border-[3px]",
+                  "fx-node relative z-10 grid size-6 place-items-center rounded-full border-[3px]",
+                  current && "fx-glow",
                   done && "border-emerald-600 bg-emerald-600",
                   current && "border-emerald-600 bg-lime",
                   !done && !current && "border-line-2 bg-paper",

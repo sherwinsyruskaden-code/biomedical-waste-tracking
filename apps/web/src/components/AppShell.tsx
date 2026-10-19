@@ -210,7 +210,7 @@ export function AppShell() {
               <ChevronDown className="size-4 text-ink-3" />
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
-              <DropdownMenu.Content align="end" sideOffset={8} className="z-[1200] min-w-[240px] rounded-[14px] border border-line bg-paper p-1.5 shadow-pop">
+              <DropdownMenu.Content align="end" sideOffset={8} className="fx-menu z-[1200] min-w-[240px] rounded-[14px] border border-line bg-paper p-1.5 shadow-pop">
                 <div className="px-3 py-2">
                   <p className="text-sm font-semibold">{me.user.fullName}</p>
                   <p className="truncate text-[13px] text-ink-3">{me.user.email}</p>

@@ -176,7 +176,7 @@ export function PageHeader({ title, description, actions, back }: { title: React
 
 export function Panel({ title, actions, children, className, bodyClassName, id }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; bodyClassName?: string; id?: string }) {
   return (
-    <section id={id} className={clsx("rounded-[16px] border border-line bg-paper", className)}>
+    <section id={id} className={clsx("fx-surface rounded-[16px] border border-line bg-paper", className)}>
       {(title || actions) && (
         <header className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
           {typeof title === "string" ? <h2 className="text-[17px] font-semibold">{title}</h2> : title}
@@ -215,7 +215,7 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
 }
 
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={clsx("animate-pulse rounded-lg bg-line/70", className)} aria-hidden />;
+  return <div className={clsx("animate-pulse fx-skeleton rounded-lg bg-line/70", className)} aria-hidden />;
 }
 
 export function LoadingBlock({ rows = 4 }: { rows?: number }) {
@@ -253,10 +253,10 @@ export function Modal({ open, onOpenChange, title, description, children, wide }
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[1000] bg-ink/40 backdrop-blur-[2px] data-[state=open]:animate-in" />
+        <Dialog.Overlay className="fixed inset-0 z-[1000] bg-ink/40 backdrop-blur-[2px] fx-overlay" />
         <Dialog.Content
           className={clsx(
-            "fixed left-1/2 top-1/2 z-[1001] max-h-[90vh] w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[20px] bg-paper p-6 shadow-pop focus:outline-none",
+            "fx-dialog fixed left-1/2 top-1/2 z-[1001] max-h-[90vh] w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[20px] bg-paper p-6 shadow-pop focus:outline-none",
             wide ? "max-w-2xl" : "max-w-lg",
           )}
         >
@@ -280,8 +280,8 @@ export function Drawer({ open, onOpenChange, title, children }: { open: boolean;
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[1000] bg-ink/30" />
-        <Dialog.Content className="fixed inset-y-0 right-0 z-[1001] flex w-full max-w-md flex-col bg-paper shadow-pop focus:outline-none">
+        <Dialog.Overlay className="fixed inset-0 z-[1000] bg-ink/30 fx-overlay" />
+        <Dialog.Content className="fx-drawer fixed inset-y-0 right-0 z-[1001] flex w-full max-w-md flex-col bg-paper shadow-pop focus:outline-none">
           <div className="flex items-center justify-between border-b border-line px-5 py-4">
             <Dialog.Title className="font-display text-lg font-bold">{title}</Dialog.Title>
             <Dialog.Description className="sr-only">{title}</Dialog.Description>
