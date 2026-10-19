@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Badge, Button, CategoryChip, EmptyState, ErrorState, Field, FormError, Input, LoadingBlock, Modal, PageHeader, Pagination, Select, Textarea, fieldError } from "../components/ui";
 import { api, qs } from "../lib/api";
 import { assignmentMeta, fmtDateTime, fmtQty } from "../lib/format";
-import { useFacilities, useMembers } from "../lib/queries";
+import { useAvailableTransporters, useFacilities } from "../lib/queries";
 import { dueWindow, isoToWall, pickupWindow, wallIssue, wallToIso, wallToMs } from "../lib/dates";
 import { useActor, useOrgTimezone, useWorkplace } from "../lib/session";
 import type { AssignmentStatus, BatchListItem, Paged } from "../lib/types";
@@ -23,6 +23,9 @@ interface Row {
   dueBy: string;
   trackingActive: boolean;
   batchCount: number;
+  declinedAt: string | null;
+  cancelReason: string | null;
+  firstBatchId: string | null;
 }
 
 
@@ -30,7 +33,7 @@ export function CreateAssignment({ open, onOpenChange, presetOrigin }: { open: b
   const qc = useQueryClient();
   const navigate = useNavigate();
   const facilities = useFacilities();
-  const transporters = useMembers("transporter");
+  const transporters = useAvailableTransporters(open);
   const [origin, setOrigin] = useState(presetOrigin ?? "");
   const [dest, setDest] = useState("");
   const [transporter, setTransporter] = useState("");
@@ -60,7 +63,7 @@ export function CreateAssignment({ open, onOpenChange, presetOrigin }: { open: b
   const pickupMs = wallToMs(pickup, tz);
   const dw = pickupMs === null ? null : dueWindow(pickupMs);
   const dueError = !dw ? "Set a valid pickup time first." : wallIssue(due, tz, dw.min, dw.max);
-  const activeTransporters = (transporters.data ?? []).filter((t) => t.status === "active");
+  const activeTransporters = transporters.data?.items ?? [];
   return (
     <Modal open={open} onOpenChange={onOpenChange} title="New transport job" description="Pick segregated batches waiting at one facility and send them to a receiving facility." wide>
       <form onSubmit={(e) => { e.preventDefault(); m.mutate(); }} className="flex flex-col gap-4">
@@ -106,10 +109,10 @@ export function CreateAssignment({ open, onOpenChange, presetOrigin }: { open: b
           </fieldset>
         )}
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Transporter" htmlFor="at" required hint={activeTransporters.length === 0 ? <>No transporters yet. <Link to="/team" className="font-semibold text-emerald-700">Invite one</Link></> : undefined}>
+          <Field label="Transporter" htmlFor="at" required hint={activeTransporters.length === 0 && transporters.isSuccess ? (transporters.data!.total === 0 ? <>No transporter in your organization yet. <Link to="/team" className="font-semibold text-emerald-700">Invite one</Link></> : "Every transporter has an active order right now.") : undefined}>
             <Select id="at" value={transporter} onChange={(e) => { setTransporter(e.target.value); const t = activeTransporters.find((x) => x.userId === e.target.value); if (t?.vehicleReg && !vehicle) setVehicle(t.vehicleReg); }}>
               <option value="">Choose…</option>
-              {activeTransporters.map((t) => <option key={t.userId} value={t.userId}>{t.fullName}{t.vehicleReg ? ` (${t.vehicleReg})` : ""}</option>)}
+              {activeTransporters.map((t) => <option key={t.userId} value={t.userId}>{t.fullName}{t.vehicleReg ? ` · ${t.vehicleReg}` : ""}{t.phone ? ` · ${t.phone}` : ""}</option>)}
             </Select>
           </Field>
           <Field label="Vehicle registration" htmlFor="av">
@@ -143,7 +146,7 @@ export default function Assignments() {
   const status = params.get("status") ?? (isTransporter ? "assigned,accepted,in_progress" : "");
   const page = Number(params.get("page") ?? 1);
   const q = useQuery({ queryKey: ["assignments", status, page], queryFn: () => api.get<Paged<Row>>(`/api/assignments${qs({ status, page, pageSize: 20 })}`), placeholderData: (p) => p });
-  const tabs: [string, string][] = [["assigned,accepted,in_progress", "Active"], ["completed", "Completed"], ["cancelled", "Cancelled"], ["", "All"]];
+  const tabs: [string, string][] = [["assigned,accepted,in_progress", "Active"], ["completed", "Completed"], ["declined", "Declined"], ["cancelled", "Cancelled"], ["", "All"]];
   return (
     <>
       <PageHeader
@@ -180,7 +183,16 @@ export default function Assignments() {
                       <span className="block">Destination: <strong className="text-ink">{a.destinationName}</strong></span>
                       <span className="block text-[13px] text-ink-3">Transporter: {a.transporterName}{a.vehicleReg ? ` · ${a.vehicleReg}` : ""}</span>
                     </span>
-                    <span className="text-sm text-ink-2">Due {fmtDateTime(a.dueBy)}</span>
+                    <span className="text-sm text-ink-2">
+                      {a.status === "declined" ? (
+                        <>
+                          <span className="block font-semibold text-danger" data-testid="declined-note">Declined {a.declinedAt ? fmtDateTime(a.declinedAt) : ""}</span>
+                          {a.cancelReason && <span className="block text-[13px] text-ink-3">“{a.cancelReason}”</span>}
+                          <span className="block text-[13px] text-ink-3">No longer waiting for {a.transporterName} to accept.</span>
+                          {!isTransporter && !isAdmin && a.firstBatchId && <span className="mt-1 inline-block text-[13px] font-semibold text-emerald-700">Open the batch to request collection again</span>}
+                        </>
+                      ) : `Due ${fmtDateTime(a.dueBy)}`}
+                    </span>
                     <span className="flex flex-wrap gap-1.5 md:justify-end">
                       {a.trackingActive && <Badge tone="lime"><Radio className="size-3" /> GPS</Badge>}
                       <Badge tone={assignmentMeta[a.status].tone}>{assignmentMeta[a.status].label}</Badge>

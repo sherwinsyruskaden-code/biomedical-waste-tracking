@@ -120,9 +120,10 @@ describe("the full journey: registration → collection request → transport �
     expect(b.currentAssignment.transporterUserId).toBe(driverId);
   });
 
-  it("the treatment plant sees the incoming batch but other transporters do not", async () => {
+  it("the plant does not see a merely requested batch; other transporters see nothing of it", async () => {
     const incoming = (await plantStaff.get("/api/batches")).body.items.map((x: { id: string }) => x.id);
-    expect(incoming).toContain(batchId);
+    expect(incoming).not.toContain(batchId); // requested, not yet accepted or on its way
+    expect((await plantStaff.get(`/api/batches/${batchId}`)).status).toBe(404);
     expect((await plantStaff.post(`/api/batches/${batchId}/request-collection`, {})).status).toBe(403);
     expect((await otherDriver.get(`/api/batches/${batchId}`)).status).toBe(404);
     expect((await otherDriver.get(`/api/assignments/${jobId}`)).status).toBe(404);
@@ -139,7 +140,9 @@ describe("the full journey: registration → collection request → transport �
     expect((await driver.post(`/api/assignments/${jobId}/accept`)).status).toBe(200);
     expect((await act(driver, batchId, "pickup", { scanMethod: "qr", identifier: qr })).status).toBe(200);
     expect((await driver.post(`/api/assignments/${jobId}/start`)).status).toBe(200);
-    expect((await act(driver, batchId, "handover", { scanMethod: "qr", identifier: qr })).status).toBe(200);
+    // Now it is on its way to the plant, which can see it (and nothing else of the hospital's)
+    expect((await plantStaff.get("/api/batches?status=in_transit")).body.items.map((x: { id: string }) => x.id)).toContain(batchId);
+    expect((await act(driver, batchId, "handover", {})).status).toBe(200); // arrival: no scan
     expect((await driver.get(`/api/assignments/${jobId}`)).body.status).toBe("completed");
     // Simulated scans exist only in the demo organization.
     expect((await driver.post(`/api/demo/batches/${batchId}/simulate-scan`, { action: "pickup" })).status).toBe(404);

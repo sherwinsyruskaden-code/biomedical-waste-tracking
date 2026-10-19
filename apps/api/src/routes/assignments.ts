@@ -10,7 +10,7 @@ import { badRequest, forbidden, invalidTransition, notFound } from "../lib/error
 import { publish } from "../lib/events.js";
 import { logger } from "../lib/logger.js";
 import { actorOf, route, zId, zOptionalText, zPage, type Actor } from "../lib/http.js";
-import { assignmentAction, createAssignment, setTracking, updateAssignment } from "../services/assignments.js";
+import { assignmentAction, createAssignment, eligibleTransporters, setTracking, updateAssignment } from "../services/assignments.js";
 import { readSettings } from "../services/settings.js";
 import { organizations } from "../db/schema.js";
 
@@ -24,7 +24,7 @@ function asgVisibility(a: Actor) {
   if (a.role === "admin") return undefined;
   if (a.role === "transporter") return eq(assignments.transporterUserId, a.userId);
   if (!a.facilityIds.length) return sql`false`;
-  return or(inArray(assignments.originFacilityId, a.facilityIds), inArray(assignments.destinationFacilityId, a.facilityIds));
+  return or(inArray(assignments.originFacilityId, a.facilityIds), and(inArray(assignments.destinationFacilityId, a.facilityIds), inArray(assignments.status, ["accepted", "in_progress", "completed"])));
 }
 
 async function loadVisibleAssignment(a: Actor, id: string) {
@@ -50,6 +50,9 @@ const listCols = {
   lastLocationAt: assignments.lastLocationAt,
   createdAt: assignments.createdAt,
   completedAt: assignments.completedAt,
+  declinedAt: assignments.declinedAt,
+  cancelReason: assignments.cancelReason,
+  firstBatchId: sql<string | null>`(select ab.batch_id from ${assignmentBatches} ab where ab.assignment_id = ${assignments.id} order by ab.added_at limit 1)`,
   batchCount: sql<number>`(select count(*)::int from ${assignmentBatches} ab where ab.assignment_id = ${assignments.id} and ab.removed_at is null)`,
 };
 
@@ -82,6 +85,8 @@ route(router, base, {
   const [{ total }] = await db.select({ total: count() }).from(assignments).where(where);
   return { items, total, page: ctx.query.page, pageSize: ctx.query.pageSize };
 });
+
+route(router, base, { method: "get", path: "/transporters/available", summary: "Transporters free for a new order: { items, total, busy } (admin dispatch)", tag: "Assignments", access: "member", roles: ["admin"] }, async (ctx) => eligibleTransporters(actorOf(ctx).orgId));
 
 route(router, base, {
   method: "post",
@@ -327,7 +332,7 @@ route(router, base, {
   roles: ["admin"],
   body: z.object({ run: z.boolean() }),
 }, async (ctx) => {
-  if (!env.DEMO_MODE) throw forbidden("Demo mode is disabled on this server.");
+  if (!env.DEMO_MODE) throw forbidden("Sample-data mode is disabled on this server.");
   const a = actorOf(ctx);
   const asg = await loadVisibleAssignment(a, ctx.params.assignmentId);
   const existing = simulations.get(asg.id);

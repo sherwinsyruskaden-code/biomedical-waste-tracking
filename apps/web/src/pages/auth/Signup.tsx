@@ -1,11 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Building2, Factory, Hospital, MailOpen, Truck } from "lucide-react";
+import { Building2, MailOpen } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { FacilityFields, emptyFacility, facilityPayload } from "../../components/FacilityFields";
-import { Button, Checkbox, Field, FormError, Input, Select, fieldError } from "../../components/ui";
+import { RegistrationFacilityFields, emptyRegistration, registrationPayload } from "../../components/FacilityFields";
+import { Button, Checkbox, Field, FormError, Input, Select, fieldError, PasswordInput } from "../../components/ui";
 import { api } from "../../lib/api";
+import { PASSWORD_HINT, passwordIssue } from "../../lib/password";
 import { AuthLayout } from "./AuthLayout";
 
 export const orgTypes = [
@@ -22,23 +23,11 @@ export const orgTypes = [
 function JoinByInvitation() {
   return (
     <div className="flex flex-col gap-5" data-testid="join-by-invitation">
-      <p className="text-ink-2">People who work for an organization that already uses BWTS are added by that organization's administrator, who chooses their role and facility:</p>
-      <ul className="flex flex-col gap-2.5 text-sm">
-        {[
-          [<Hospital key="h" className="size-4" />, "Hospital staff", "invited to their hospital"],
-          [<Factory key="f" className="size-4" />, "Treatment-plant staff", "invited to their approved treatment plant"],
-          [<Truck key="t" className="size-4" />, "Transporters", "invited by the organization that dispatches them"],
-        ].map(([icon, role, how]) => (
-          <li key={String(role)} className="flex items-center gap-3 rounded-[12px] bg-mist px-3.5 py-2.5">
-            <span className="text-emerald-700">{icon}</span>
-            <span><strong>{role}</strong> <span className="text-ink-2">— {how}</span></span>
-          </li>
-        ))}
-      </ul>
+      <p className="text-ink-2">People who work for an organization that already uses BWTS are added by that organization's administrator, who chooses their role and facility.</p>
       <Link to="/invite" className="inline-flex h-12 items-center justify-center gap-2 rounded-[12px] bg-emerald-600 px-6 font-semibold text-white hover:bg-emerald-700">
         <MailOpen className="size-4" /> I have an invitation — accept it
       </Link>
-      <p className="text-[13px] text-ink-3">No invitation yet? Ask your organization administrator to invite you (Team → Invite). Roles can't be chosen at sign-up, so nobody can give themselves extra access.</p>
+      <p className="text-[13px] text-ink-3">No invitation yet? Ask your organization administrator to invite you.</p>
     </div>
   );
 }
@@ -54,8 +43,7 @@ export default function Signup() {
   const [confirmPassword, setConfirm] = useState("");
   const [orgName, setOrgName] = useState("");
   const [orgType, setOrgType] = useState("hospital");
-  const [withFacility, setWithFacility] = useState(true);
-  const [facility, setFacility] = useState(emptyFacility());
+  const [facility, setFacility] = useState(emptyRegistration());
   const [accept, setAccept] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -67,7 +55,7 @@ export default function Signup() {
         password,
         confirmPassword,
         organization: { name: orgName, type: orgType },
-        facility: withFacility ? facilityPayload(facility) : null,
+        facility: registrationPayload(facility),
         acceptTerms: accept,
       }),
     onSuccess: async () => {
@@ -78,6 +66,8 @@ export default function Signup() {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    const issue = passwordIssue(password);
+    if (issue) return setLocalError(issue);
     if (password !== confirmPassword) return setLocalError("Passwords do not match.");
     if (!accept) return setLocalError("Please accept the terms and privacy notice to continue.");
     setLocalError(null);
@@ -93,7 +83,7 @@ export default function Signup() {
         path === "organization" ? (
           <>
             <p className="font-display text-[30px] font-bold leading-tight">You'll be the organization admin.</p>
-            <p className="mt-3 max-w-[40ch] text-white/75">The platform team reviews new organizations. Once yours is approved you can add facilities, invite hospital staff, plant staff and transporters, and register the first batch.</p>
+            <p className="mt-3 max-w-[40ch] text-white/75">The platform team reviews new organizations. Once yours is approved you can add facilities and register your first batch. Inviting your team is optional and can wait.</p>
           </>
         ) : undefined
       }
@@ -127,11 +117,11 @@ export default function Signup() {
             <Input id="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
           </Field>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Password" htmlFor="pw" error={fe("password")} hint="10+ characters, letters and numbers" required>
-              <Input id="pw" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <Field label="Password" htmlFor="pw" hint={PASSWORD_HINT} error={(password ? passwordIssue(password) : null) ?? fe("password")} required>
+              <PasswordInput id="pw" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
             </Field>
             <Field label="Confirm password" htmlFor="pw2" error={fe("confirmPassword") ?? (localError === "Passwords do not match." ? localError : undefined)} required>
-              <Input id="pw2" type="password" autoComplete="new-password" value={confirmPassword} onChange={(e) => setConfirm(e.target.value)} />
+              <PasswordInput id="pw2" label="confirm password" autoComplete="new-password" value={confirmPassword} onChange={(e) => setConfirm(e.target.value)} />
             </Field>
           </div>
         </fieldset>
@@ -153,9 +143,8 @@ export default function Signup() {
         </fieldset>
 
         <fieldset className="flex flex-col gap-4">
-          <legend className="mb-3 font-display text-[17px] font-bold">First facility</legend>
-          <Checkbox checked={withFacility} onChange={setWithFacility} label="Add my first facility now (recommended)" />
-          {withFacility && <FacilityFields value={facility} onChange={setFacility} error={m.error} prefix="facility." compact />}
+          <legend className="mb-3 font-display text-[17px] font-bold">Facility</legend>
+          <RegistrationFacilityFields value={facility} onChange={setFacility} error={m.error} />
         </fieldset>
 
         <div className="flex flex-col gap-4">

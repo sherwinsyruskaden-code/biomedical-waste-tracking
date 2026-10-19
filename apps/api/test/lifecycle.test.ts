@@ -1,6 +1,9 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import pg from "pg";
 import { addMember, signupOrg, uniq, type Client } from "./helpers.js";
+import { eq } from "drizzle-orm";
+import { db } from "../src/db/client.js";
+import { alerts as alertsTable } from "../src/db/schema.js";
 import { runAlertChecks } from "../src/services/alerts.js";
 
 let admin: Client, staff: Client, plantStaff: Client, driver: Client, otherDriver: Client;
@@ -14,6 +17,10 @@ beforeAll(async () => {
   yellowId = org.categories.find((c) => c.code === "YELLOW")!.id;
   staff = (await addMember(admin, "facility_staff", [hospitalId])).c;
   plantStaff = (await addMember(admin, "facility_staff", [plantId])).c;
+});
+
+// Every test gets two fresh, free transporters: a transporter can only hold one active order at a time.
+beforeEach(async () => {
   const d = await addMember(admin, "transporter");
   driver = d.c;
   driverId = d.userId;
@@ -197,7 +204,7 @@ describe("end-to-end waste lifecycle", () => {
     expect(b2detail.body.status).toBe("segregated");
   });
 
-  it("handles a rejected delivery: alert + incident, then admin reroutes to another facility", async () => {
+  it("handles a rejected delivery, then admin reroutes to another facility", async () => {
     const plant2 = await admin.post("/api/facilities", { name: `Backup Plant ${uniq()}`, type: "treatment", canReceive: true, address: "Backup Road, Chennai", latitude: 13.05, longitude: 80.25 });
     const b = await newBatch(10, 1);
     await act(staff, b.id, "segregate", { confirmSegregation: true });
@@ -210,10 +217,10 @@ describe("end-to-end waste lifecycle", () => {
     const rej = await act(plantStaff, b.id, "receive", { accepted: false, receivedQuantity: 4, unit: "kg", condition: "leaking", notes: "Bag leaking, weight mismatch" });
     expect(rej.status).toBe(200);
     expect(rej.body.status).toBe("rejected");
-    const alerts = await admin.get("/api/alerts");
-    expect(alerts.body.items.some((x: { type: string; batchId: string }) => x.type === "failed_receipt" && x.batchId === b.id)).toBe(true);
-    const inc = await admin.get(`/api/incidents?batchId=${b.id}`);
-    expect(inc.body.items.map((i: { type: string }) => i.type).sort()).toEqual(["leak", "weight_discrepancy"]);
+    // Alerts and incidents are switched off: their endpoints are gone and nothing new is recorded.
+    expect((await admin.get("/api/alerts")).status).toBe(404);
+    expect((await admin.get(`/api/incidents?batchId=${b.id}`)).status).toBe(404);
+    expect((await admin.get(`/api/batches/${b.id}`)).body).not.toHaveProperty("incidents");
     expect((await act(staff, b.id, "reroute", { destinationFacilityId: plant2.body.id, dueBy: new Date(Date.now() + 7200_000).toISOString() })).status).toBe(422);
     const rr = await act(admin, b.id, "reroute", { destinationFacilityId: plant2.body.id, dueBy: new Date(Date.now() + 7200_000).toISOString() });
     expect(rr.status).toBe(200);
@@ -224,23 +231,15 @@ describe("end-to-end waste lifecycle", () => {
     expect(newAsg.body.isMine).toBe(true);
   });
 
-  it("raises threshold alerts from the background job and auto-resolves them", async () => {
-    await admin.put("/api/organization/settings", { collectionOverdueHours: 1, transportDelayGraceMinutes: 30, custodyMaxHours: 8, receiptPendingMinutes: 60, staleGpsMinutes: 5, locationRetentionDays: 180, weightTolerancePercent: 10 });
+  it("the background job no longer raises alerts, but keeps applying location retention", async () => {
     const b = await newBatch(1, 1);
-    await runAlertChecks(new Date(Date.now() + 2 * 3600_000)); // pretend 2 h passed
-    let list = await admin.get("/api/alerts");
-    expect(list.body.items.some((x: { type: string; batchId: string }) => x.type === "overdue_collection" && x.batchId === b.id)).toBe(true);
-    // Staff at the origin facility are notified too
-    const notes = await staff.get("/api/notifications");
-    expect(notes.body.items.some((n: { kind: string }) => n.kind === "alert.overdue_collection")).toBe(true);
-    // Running again does not duplicate the open alert
-    await runAlertChecks(new Date(Date.now() + 2 * 3600_000));
-    list = await admin.get("/api/alerts?pageSize=100");
-    expect(list.body.items.filter((x: { type: string; batchId: string }) => x.type === "overdue_collection" && x.batchId === b.id)).toHaveLength(1);
-    await act(staff, b.id, "cancel", { reason: "Registered by mistake" });
-    await runAlertChecks(new Date(Date.now() + 2 * 3600_000));
-    list = await admin.get("/api/alerts?pageSize=100");
-    expect(list.body.items.some((x: { batchId: string }) => x.batchId === b.id)).toBe(false);
+    await runAlertChecks(new Date(Date.now() + 200 * 3600_000)); // pretend a long time passed
+    expect((await admin.get("/api/alerts")).status).toBe(404);
+    const rows = await db.select().from(alertsTable).where(eq(alertsTable.batchId, b.id));
+    expect(rows).toHaveLength(0);
+    expect((await admin.get("/api/incidents")).status).toBe(404);
+    expect((await admin.get("/api/reports?type=incidents")).status).toBe(400);
+    expect((await admin.get("/api/dashboard")).body.kpis).not.toHaveProperty("openAlerts");
   });
 
   it("supports RFID/NFC tags through the same identification flow, preventing collisions", async () => {
@@ -306,7 +305,7 @@ describe("reports and dashboard", () => {
     });
     expect(pdf.status).toBe(200);
     expect((pdf.body as Buffer).subarray(0, 5).toString()).toBe("%PDF-");
-    for (const type of ["volume_by_category", "facility_activity", "incidents", "disposal"]) {
+    for (const type of ["volume_by_category", "facility_activity", "disposal"]) {
       expect((await admin.get(`/api/reports?type=${type}`)).status).toBe(200);
     }
     expect((await driver.get("/api/reports?type=batches")).status).toBe(403);

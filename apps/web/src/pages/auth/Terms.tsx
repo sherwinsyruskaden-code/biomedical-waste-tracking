@@ -27,7 +27,7 @@ export default function Terms() {
           </section>
           <section>
             <h2>Your responsibilities</h2>
-            <p>Admins configure waste categories, disposal methods and alert thresholds to match the rules that apply to them, and make sure staff use the system accurately.</p>
+            <p>Admins configure waste categories, disposal methods and tracking settings to match the rules that apply to them, and make sure staff use the system accurately.</p>
           </section>
         </div>
       </div>

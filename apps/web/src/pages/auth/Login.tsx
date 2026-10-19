@@ -2,8 +2,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { Button, Field, FormError, Input, fieldError } from "../../components/ui";
+import { Button, Field, FormError, Input, fieldError, PasswordInput } from "../../components/ui";
 import { api } from "../../lib/api";
+import { PASSWORD_HINT, passwordIssue } from "../../lib/password";
 import { AuthLayout } from "./AuthLayout";
 import { DemoLogin } from "../../components/DemoLogin";
 
@@ -34,7 +35,7 @@ export function Login() {
           <Input id="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
         </Field>
         <Field label="Password" htmlFor="password">
-          <Input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+          <PasswordInput id="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
         <div className="flex justify-end">
           <Link to="/forgot-password" className="text-sm font-semibold text-emerald-700 hover:underline">
@@ -86,6 +87,7 @@ export function ResetPassword() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [mismatch, setMismatch] = useState(false);
+  const [tooShort, setTooShort] = useState<string | null>(null);
   const m = useMutation({ mutationFn: () => api.post("/api/auth/reset-password", { token, password }), onSuccess: () => setTimeout(() => navigate("/login"), 1500) });
   return (
     <AuthLayout title="Choose a new password" subtitle="This signs you out on every other device.">
@@ -97,6 +99,9 @@ export function ResetPassword() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
+            const issue = passwordIssue(password);
+            setTooShort(issue);
+            if (issue) return;
             if (password !== confirm) return setMismatch(true);
             setMismatch(false);
             m.mutate();
@@ -104,11 +109,11 @@ export function ResetPassword() {
           className="flex flex-col gap-4"
         >
           <FormError error={m.error} />
-          <Field label="New password" htmlFor="pw" hint="At least 10 characters, with letters and numbers." error={fieldError(m.error, "password")}>
-            <Input id="pw" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          <Field label="New password" htmlFor="pw" hint={PASSWORD_HINT} error={tooShort ?? fieldError(m.error, "password")}>
+            <PasswordInput id="pw" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </Field>
           <Field label="Confirm password" htmlFor="pw2" error={mismatch ? "Passwords do not match" : undefined}>
-            <Input id="pw2" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required invalid={mismatch} />
+            <PasswordInput id="pw2" label="confirm password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required invalid={mismatch} />
           </Field>
           <Button type="submit" size="lg" loading={m.isPending}>Update password</Button>
         </form>

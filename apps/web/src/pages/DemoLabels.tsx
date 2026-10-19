@@ -26,7 +26,7 @@ function DemoLabel({ b, index, large }: { b: DemoBatch; index: number; large?: b
   const l = b.labels[index];
   return (
     <article className="label-card overflow-hidden rounded-[18px] border-2 border-ink bg-white" data-testid="demo-label">
-      <div className="bg-amber-400 px-4 py-1.5 text-center text-[12.5px] font-extrabold uppercase tracking-wider text-ink">Demo label · synthetic data · not real waste</div>
+      <div className="bg-amber-400 px-4 py-1.5 text-center text-[12.5px] font-extrabold uppercase tracking-wider text-ink">Sample label · synthetic data · not real waste</div>
       <div className="flex items-center justify-between px-4 py-2 text-white" style={{ background: b.category.colorHex }}>
         <span className="font-display text-lg font-extrabold drop-shadow-[0_1px_0_rgb(0_0_0/0.35)]">{b.category.code}</span>
         <span className="text-[12px] font-bold drop-shadow-[0_1px_0_rgb(0_0_0/0.35)]">BIOMEDICAL WASTE · BIOHAZARD</span>
@@ -53,20 +53,20 @@ export default function DemoLabels() {
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
   const batches = (q.data?.batches ?? []).filter((b) => b.labels.length > 0);
   if (!batches.length)
-    return <EmptyState title="No demo labels for this account">Sign in with one of the demo roles to see the labels it can scan.</EmptyState>;
+    return <EmptyState title="No sample labels for this account">Sign in as a hospital, transporter or plant role to see the labels it can scan.</EmptyState>;
   const b = batches.find((x) => x.batchId === sel) ?? batches[0];
   const i = Math.min(idx, b.labels.length - 1);
   return (
     <>
       <div className="no-print">
         <PageHeader
-          title="Demo QR labels"
-          description="Show one of these on a screen, or print it, and scan it with the Scan page. Each label opens its own synthetic demo batch. They only work inside the demo organization."
+          title="Sample QR labels"
+          description="Show one of these on a screen, or print it, and scan it with the Scan page. Each label opens its own synthetic batch and only works in the sample organization."
           actions={<Link to="/scan" className="inline-flex h-10 items-center rounded-[10px] bg-lime px-4 text-sm font-semibold text-ink hover:bg-[#b8e81f]">Go to scanner</Link>}
         />
       </div>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,360px)_1fr]">
-        <ul className="no-print flex max-h-[70vh] flex-col gap-2 overflow-y-auto pr-1" aria-label="Demo batches">
+        <ul className="no-print flex max-h-[70vh] flex-col gap-2 overflow-y-auto pr-1" aria-label="Sample batches">
           {batches.map((x) => (
             <li key={x.batchId}>
               <button
@@ -99,7 +99,7 @@ export default function DemoLabels() {
         </div>
       </div>
       {full && createPortal(
-        <div className="fixed inset-0 z-[200] grid place-items-center overflow-auto bg-white p-4" role="dialog" aria-label="Full-screen demo label">
+        <div className="fixed inset-0 z-[200] grid place-items-center overflow-auto bg-white p-4" role="dialog" aria-label="Full-screen sample label">
           <button type="button" onClick={() => setFull(false)} className="no-print absolute left-4 top-4 inline-flex items-center gap-1.5 rounded-[10px] border border-line-2 bg-paper px-3 py-2 text-sm font-semibold hover:border-emerald-600">
             <X className="size-4" /> Close
           </button>

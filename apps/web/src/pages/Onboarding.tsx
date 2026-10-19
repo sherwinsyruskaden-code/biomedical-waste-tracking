@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { FacilityFields, emptyFacility, facilityPayload } from "../components/FacilityFields";
+import { RegistrationFacilityFields, emptyRegistration, registrationPayload } from "../components/FacilityFields";
 import { Button, Field, FormError, Input, Select, fieldError } from "../components/ui";
 import { api } from "../lib/api";
 import { useMe } from "../lib/session";
@@ -15,9 +15,9 @@ export default function Onboarding() {
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [type, setType] = useState("hospital");
-  const [facility, setFacility] = useState(emptyFacility());
+  const [facility, setFacility] = useState(emptyRegistration());
   const create = useMutation({
-    mutationFn: () => api.post("/api/auth/create-organization", { organization: { name, type }, facility: facility.name ? facilityPayload(facility) : null }),
+    mutationFn: () => api.post("/api/auth/create-organization", { organization: { name, type }, facility: registrationPayload(facility) }),
     onSuccess: async () => {
       await qc.invalidateQueries();
       navigate("/dashboard?welcome=1", { replace: true });
@@ -55,8 +55,8 @@ export default function Onboarding() {
             </Select>
           </Field>
         </div>
-        <p className="text-sm text-ink-2">First facility (optional — leave the name empty to skip)</p>
-        <FacilityFields value={facility} onChange={setFacility} error={create.error} prefix="facility." compact />
+        <h3 className="text-[15px] font-bold">Facility</h3>
+        <RegistrationFacilityFields value={facility} onChange={setFacility} error={create.error} />
         <FormError error={create.error} />
         <Button type="submit" size="lg" loading={create.isPending}>Create organization</Button>
         <Button type="button" variant="ghost" onClick={() => logout.mutate()}>Sign out</Button>

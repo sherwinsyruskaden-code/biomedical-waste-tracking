@@ -6,10 +6,15 @@ import { logger } from "./lib/logger.js";
 import { mailConfigured } from "./lib/mailer.js";
 import { startAlertJob, stopAlertJob } from "./services/alerts.js";
 import { stopSimulations } from "./routes/assignments.js";
+import { upgradeSampleData } from "./services/demo.js";
 
 async function main() {
   // Apply pending migrations on boot so a fresh checkout "just works". Safe to run repeatedly.
   await runMigrations();
+  if (env.DEMO_MODE) {
+    // Existing sample data (from earlier versions) is renamed / topped up in place. Nothing is created or deleted here.
+    await upgradeSampleData().catch((err) => logger.warn({ err }, "Could not refresh the existing sample data"));
+  }
   const app = createApp();
   const server = app.listen(env.PORT, () => {
     logger.info(`BWTS API listening on http://localhost:${env.PORT}  (docs: http://localhost:${env.PORT}/api/docs)`);

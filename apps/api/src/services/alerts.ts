@@ -31,8 +31,16 @@ export interface AlertInput {
   notifyUserIds?: string[];
 }
 
+/**
+ * Alerts and incidents are switched off in this version (no screens, no endpoints). The code and all stored
+ * rows are kept so the feature can be re-enabled later: set this to true and restore the routes in routes/ops.ts.
+ * The periodic job still runs the location-retention clean-up.
+ */
+export const ALERTS_ENABLED = false;
+
 /** Inserts an alert unless an open alert with the same dedupe key exists. Returns true if new. */
 export async function raiseAlert(a: AlertInput): Promise<boolean> {
+  if (!ALERTS_ENABLED) return false;
   const rows = await db
     .insert(alerts)
     .values({
@@ -69,6 +77,10 @@ export async function runAlertChecks(now = new Date()) {
   let raised = 0;
   for (const org of orgs) {
     const s = readSettings(org.settings);
+    if (!ALERTS_ENABLED) {
+      await db.delete(locationPoints).where(and(eq(locationPoints.organizationId, org.id), lt(locationPoints.receivedAt, new Date(now.getTime() - s.locationRetentionDays * 86400_000))));
+      continue;
+    }
     const active = new Set<string>();
     const pending: AlertInput[] = [];
 

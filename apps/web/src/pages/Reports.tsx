@@ -16,7 +16,6 @@ const types = [
   { id: "facility_activity", label: "Facility activity", desc: "Generated, received, rejected, disposed" },
   { id: "transport_performance", label: "Transport performance", desc: "Trips, durations and on-time delivery" },
   { id: "custody_history", label: "Custody history", desc: "Every recorded event and custodian" },
-  { id: "incidents", label: "Incidents & delays", desc: "Reported incidents and delay alerts" },
   { id: "disposal", label: "Disposal records", desc: "Treatment method, quantity, plant reference" },
 ] as const;
 

@@ -26,7 +26,7 @@ const open = async (opts = {}) => {
 };
 let failed = 0;
 async function check(name, fn) { try { await fn(); console.log(`  ✓ ${name}`); } catch (e) { failed++; console.log(`  ✗ ${name}\n      ${String(e.message ?? e).split("\n").slice(0, 5).join("\n      ")}`); } }
-const signInAdmin = async (p) => { await p.goto("/login"); await p.getByRole("button", { name: /Organization administrator/ }).click(); await p.waitForURL("**/dashboard", { timeout: 90000 }); };
+const signInAdmin = async (p) => { await p.goto("/login"); await p.getByRole("button", { name: /Main Admin/ }).click(); await p.waitForURL("**/dashboard", { timeout: 90000 }); };
 const counters = (p) => p.locator("[data-value]").evaluateAll((els) => els.map((e) => ({ shown: e.textContent.trim(), value: e.getAttribute("data-value") })));
 
 console.log("Normal motion");
@@ -40,8 +40,8 @@ await check("dashboard numbers settle on the true values", async () => {
   for (const x of c) assert.equal(x.shown, Number(x.value).toLocaleString("en-US"), `shows ${x.shown}, true value ${x.value}`);
 });
 await check("a route change plays the soft entrance and leaves no lingering transform", async () => {
-  await p1.getByRole("link", { name: "Alerts & incidents" }).first().click();
-  await p1.waitForURL("**/alerts");
+  await p1.getByRole("link", { name: "Reports" }).first().click();
+  await p1.waitForURL("**/reports");
   await p1.waitForTimeout(700);
   const t = await p1.evaluate(() => getComputedStyle(document.querySelector("main > div")).transform);
   assert.equal(t, "none", "a leftover transform would trap fixed-position children");

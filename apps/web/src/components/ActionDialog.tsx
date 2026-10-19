@@ -24,7 +24,7 @@ const titles: Record<ActionInfo["action"], string> = {
   segregate: "Verify segregation",
   cancel: "Cancel batch",
   pickup: "Confirm pickup",
-  handover: "Hand over at destination",
+  handover: "Mark arrived at treatment plant",
   receive: "Confirm receipt",
   dispose: "Record disposal",
   reroute: "Reroute rejected load",
@@ -34,7 +34,7 @@ const successText: Record<ActionInfo["action"], string> = {
   segregate: "Segregation verified",
   cancel: "Batch cancelled",
   pickup: "Pickup confirmed — custody is now with the transporter",
-  handover: "Handed over — waiting for the plant to confirm receipt",
+  handover: "Arrived — waiting for the treatment plant to confirm receipt",
   receive: "Receipt recorded",
   dispose: "Disposal recorded",
   reroute: "Load rerouted",
@@ -51,7 +51,7 @@ function getPosition(): Promise<{ latitude: number; longitude: number } | null> 
   });
 }
 
-/** Scan-or-manual block used by pickup, handover and receipt. */
+/** Scan-or-manual block used by pickup and arrival (the transporter). Receipt needs no scan. */
 function ScanStep({ scan, setScan, required }: { scan: ScanResult | null; setScan: (s: ScanResult | null) => void; required: boolean }) {
   if (scan)
     return (
@@ -64,21 +64,18 @@ function ScanStep({ scan, setScan, required }: { scan: ScanResult | null; setSca
     );
   return (
     <div className="flex flex-col gap-2">
-      <p className="flex items-center gap-2 text-sm font-semibold text-ink-2">
-        <ScanLine className="size-4" /> Scan any container in this batch{required ? "" : " (optional)"}
-      </p>
       <Scanner onResult={setScan} />
     </div>
   );
 }
 
-export function ActionDialog({ action, target, open, onOpenChange, onDone }: { action: ActionInfo["action"]; target: ActionTarget; open: boolean; onOpenChange: (o: boolean) => void; onDone?: (status: BatchStatus) => void }) {
+export function ActionDialog({ action, target, open, onOpenChange, onDone, initialScan, simulated }: { action: ActionInfo["action"]; target: ActionTarget; open: boolean; onOpenChange: (o: boolean) => void; onDone?: (status: BatchStatus) => void; /** A label already scanned on the Scan page, so the transporter isn't asked to scan twice. */ initialScan?: ScanResult | null; /** The scan was simulated (sample organization): the server uses the batch's own QR and records it as simulated. */ simulated?: boolean }) {
   const qc = useQueryClient();
   const facilities = useFacilities();
   const key = useMemo(() => newIdempotencyKey(), [open, action]); // eslint-disable-line
   const [notes, setNotes] = useState("");
   const [confirm, setConfirm] = useState(false);
-  const [scan, setScan] = useState<ScanResult | null>(null);
+  const [scan, setScan] = useState<ScanResult | null>(initialScan ?? null);
   const [noScan, setNoScan] = useState(false);
   const [shareLoc, setShareLoc] = useState(true);
   const [accepted, setAccepted] = useState(true);
@@ -101,26 +98,27 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone }: { a
       if (action === "segregate") body = { confirmSegregation: confirm, notes: notes || undefined };
       if (action === "cancel") body = { reason: notes };
       if (action === "pickup" || action === "handover") {
-        body = { ...scanFields, notes: notes || undefined };
+        // Pickup is scanned by the transporter; arrival is only recorded (the plant scans or selects the batch to confirm receipt).
+        body = action === "pickup" ? { ...scanFields, notes: notes || undefined } : { notes: notes || undefined };
         if (shareLoc) {
           const p = await getPosition();
           if (p) body = { ...body, ...p };
         }
       }
-      if (action === "receive") body = { accepted, receivedQuantity: Number(qty), unit, condition, notes: notes || undefined, ...scanFields };
+      if (action === "receive") body = { accepted, receivedQuantity: Number(qty), unit, condition, notes: notes || undefined, ...(simulated ? {} : scanFields), ...(simulated ? { simulatedScan: true } : {}) };
       if (action === "dispose") body = { method, treatedQuantity: qty ? Number(qty) : undefined, unit, documentRef: docRef || undefined, notes: notes || undefined };
       if (action === "reroute") body = { destinationFacilityId: dest, dueBy: wallToIso(dueBy, tz), notes: notes || undefined };
       return api.post<{ status: BatchStatus; replayed: boolean }>(`/api/batches/${target.id}/actions/${action}`, body, { "Idempotency-Key": key });
     },
     onSuccess: (r) => {
       toast.success(successText[action], { description: target.trackingCode });
-      for (const k of ["batch", "batches", "dashboard", "assignment", "assignments", "alerts", "incidents", "tracking", "receiving"]) qc.invalidateQueries({ queryKey: [k] });
+      for (const k of ["batch", "batches", "dashboard", "assignment", "assignments", "tracking", "receiving"]) qc.invalidateQueries({ queryKey: [k] });
       onOpenChange(false);
       onDone?.(r.status);
     },
   });
 
-  const needsScan = action === "pickup" || action === "handover";
+  const needsScan = action === "pickup";
   const canSubmit =
     (action !== "segregate" || confirm) &&
     (action !== "cancel" || notes.trim().length >= 3) &&
@@ -149,6 +147,8 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone }: { a
           </>
         )}
 
+        {action === "handover" && <Checkbox checked={shareLoc} onChange={setShareLoc} label="Attach my current location to this record" />}
+
         {action === "receive" && (
           <>
             <div className="grid grid-cols-2 gap-2 rounded-[12px] bg-mist p-1" role="radiogroup" aria-label="Decision">
@@ -158,8 +158,11 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone }: { a
                 </button>
               ))}
             </div>
+            <p className="text-[13px] font-medium" data-testid="receipt-source">
+              {simulated ? <span className="text-amber-900">Simulated scan of this batch's QR (sample organization): recorded as simulated.</span> : scan ? <span className="text-emerald-800">QR label scanned: recorded with this receipt.</span> : <span className="text-ink-3">Selected from the arrivals list: recorded without a scan.</span>}
+            </p>
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="Weighed quantity" htmlFor="rq" hint={`Registered: ${target.quantity} ${target.unit}`} error={fieldError(m.error, "receivedQuantity")}>
+              <Field label="Weighed quantity" htmlFor="rq" error={fieldError(m.error, "receivedQuantity")}>
                 <Input id="rq" type="number" min="0" step="0.01" value={qty} onChange={(e) => setQty(e.target.value)} />
               </Field>
               <Field label="Unit" htmlFor="ru">
@@ -173,8 +176,6 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone }: { a
                 </Select>
               </Field>
             </div>
-            <p className="text-[12.5px] text-ink-3">A weight difference above your organization's tolerance, or any condition other than intact, opens an incident automatically.</p>
-            <ScanStep scan={scan} setScan={setScan} required={false} />
           </>
         )}
 

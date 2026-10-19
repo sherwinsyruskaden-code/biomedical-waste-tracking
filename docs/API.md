@@ -119,20 +119,7 @@ Day filters (`from`, `to` on batches and reports) are calendar days `YYYY-MM-DD`
 | GET | `/api/demo/labels` | DEMO MODE + demo org only: demo batches visible to your role with their QR label and the next permitted actions | organization member |
 | GET | `/api/events/stream` | Server-sent events: location, notification and invalidate events |  |
 
-### Incidents
-
-| Method | Path | Purpose | Access |
-|---|---|---|---|
-| POST | `/api/incidents` | Report an incident or exception (spill, leak, delay, …) | organization member |
-| GET | `/api/incidents` | List incidents | organization member |
-| POST | `/api/incidents/{incidentId}/resolve` | Resolve an incident with notes | organization member (admin, facility_staff) |
-
-### Alerts
-
-| Method | Path | Purpose | Access |
-|---|---|---|---|
-| GET | `/api/alerts` | List alerts (open by default) | organization member |
-| POST | `/api/alerts/{alertId}/resolve` | Acknowledge / resolve an alert | organization member (admin, facility_staff) |
+> Incident and alert endpoints (`/api/incidents`, `/api/alerts`) were removed in this version; see `services/alerts.ts` (`ALERTS_ENABLED`).
 
 ### Notifications
 
@@ -172,16 +159,34 @@ Day filters (`from`, `to` on batches and reports) are calendar days `YYYY-MM-DD`
 
 - `location` — `{ assignmentId, transporterUserId, originFacilityId, destinationFacilityId, point }`, sent only to users allowed to see that job;
 - `notification` — a new in-app notification for the current user;
-- `invalidate` — `{ kind }`, a content-free hint that batches/assignments/alerts changed.
+- `invalidate` — `{ kind }`, a content-free hint that batches/assignments changed.
 
-## Organization approval, collection requests and demo scans
+## Organization approval, collection requests and sample-mode scans
 
 | Method & path | Access | Purpose |
 |---|---|---|
-| `GET /api/platform/organizations?status=pending\|approved\|rejected\|all` | platform administrator | Registration review queue: applicant, organization details, declared facilities |
-| `POST /api/platform/organizations/:id/approve` `{ note? }` | platform administrator | Approve a pending organization (not one you belong to) |
-| `POST /api/platform/organizations/:id/reject` `{ note }` | platform administrator | Reject with a reason; nothing is deleted |
+| `GET /api/platform/organizations?status=pending\|approved\|rejected\|all` | organization-review permission | Registration review queue: applicant, organization details, declared facilities |
+| `POST /api/platform/organizations/:id/approve` `{ note? }` | organization-review permission | Approve a pending organization (not one you belong to) |
+| `POST /api/platform/organizations/:id/reject` `{ note }` | organization-review permission | Reject with a reason; nothing is deleted |
+| `POST /api/batches` | origin-hospital staff, admin | `originFacilityId` is optional and validated against the user's facilities; it is derived when omitted. `quantity` must be a finite JSON number > 0 with at most 3 decimals. `segregationNotes` / `handlingNotes` are no longer accepted (ignored) |
 | `POST /api/batches/:id/request-collection` `{ notes? }` | origin-hospital staff, admin | Creates the transport assignment to the configured treatment plant and assigns a transporter, who must accept |
-| `POST /api/demo/batches/:id/simulate-scan` `{ action: "pickup" \| "handover" }` | transporter, admin, **demo organization only** | Runs the real lifecycle action with the batch's real QR label; recorded with `details.simulatedScan = true` |
+| `POST /api/batches/:id/actions/handover` | the assigned transporter only | Records arrival at the plant: status becomes `delivered` (shown as *Arrived — awaiting receipt*) |
+| `POST /api/batches/:id/actions/receive` and `.../dispose` | staff of the receiving plant only | Confirm receipt, then record treatment. Not available to transporters, hospital staff or organization admins |
+| `POST /api/demo/batches/:id/simulate-scan` `{ action: "pickup" \| "handover" }` | transporter, sample organization only | Runs the real lifecycle action with the batch's real QR label; recorded with `details.simulatedScan = true` |
 
-Members of a **pending** or **rejected** organization get `403` with code `organization_pending` / `organization_rejected` from every operational endpoint. `GET /api/facilities` returns `access: "managed" | "own" | "partner"`, and partner facilities only include name, type, address, contact and location.
+The review permission is a user flag (`users.is_platform_admin`) that can only be set with `npm run platform-admin`. `GET /api/auth/me` reports it as `user.canReviewOrganizations`. Members of a **pending** or **rejected** organization get `403` with code `organization_pending` / `organization_rejected` from every operational endpoint. `GET /api/facilities` returns `access: "managed" | "own" | "partner"`; partner facilities only include name, type, address, contact and location. Passwords must be at least 4 characters everywhere they are set.
+
+### Transporter choice and the batch QR
+
+| Method & path | Access | Purpose |
+|---|---|---|
+| `GET /api/batches/:id/transporters` | origin-hospital staff, admin | `{ items, total, busy }`: only **available** transporters in `items` (`userId`, `fullName`, `phone`, `vehicleReg`); `busy` counts those holding an active order |
+| `GET /api/transporters/available` | organization member | Same availability list, not tied to a batch (used when reassigning) |
+| `POST /api/batches/:id/request-collection` `{ transporterUserId?, notes? }` | origin-hospital staff, admin | `transporterUserId` is validated server-side: not an active transporter of the organization → 400; already holding an active order (assigned/accepted/in_progress) → 409; nothing is created. Row-locked, so concurrent requests cannot double-book. Only when omitted does the API pick a free transporter |
+| Assignment `decline` action | assigned transporter | Status `declined` with `declinedAt` and reason, `declined` custody event, notification `assignment.declined` to the hospital's staff and admins, batches released for a new request. A declined/cancelled assignment grants the transporter no further visibility |
+| `GET /api/platform/organizations?q=` | organization-review permission | Search by registration ID, facility, organization, admin name or email. Items include admin full name/email/phone, facility `kind`, name, `registrationId`, address, city, state, postal code, submission date, previous review |
+| Registration payload | public / signed-in | `facility: { kind: "hospital"\|"lab", name, registrationId, address, city, state, postalCode, phone? }` is required for sign-up and create-organization; other kinds are rejected (400) |
+| `POST /api/demo/batches/:id/simulate-scan` | sample organization only | Pickup only. Lifecycle actions also accept `simulatedScan: true` (sample organization only), stored as `details.simulatedScan`. Arrival by the transporter takes no scan; plant staff receive via a scan of the batch's QR |
+| Plant visibility | plant staff | Batches/assignments addressed to their plant are visible only from `collected` onward (assignments accepted/in_progress/completed); requested/unaccepted/declined ones are not |
+| `GET /api/batches/:id/labels` | origin staff, admin | The batch's own QR code(s): `batchId`, `status`, `trackingCode`, `labels[].payload`. The payload is stable for the batch's whole life |
+| `GET /api/batches?status=delivered` | plant staff (own plant) | Arrivals; each row has `trackingCode`, `originName`, `transporterName`, `statusChangedAt` |

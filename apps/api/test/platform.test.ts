@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db/client.js";
 import { auditLogs, organizations, users } from "../src/db/schema.js";
-import { client, platformAdmin, signupOrg, uniq } from "./helpers.js";
+import { client, platformAdmin, registrationFacility, signupOrg, uniq } from "./helpers.js";
 
 describe("organization registration and platform approval", () => {
   it("a new organization starts pending and cannot use operational features", async () => {
@@ -32,7 +32,7 @@ describe("organization registration and platform approval", () => {
   it("there is no way to become a platform administrator through the API", async () => {
     const c = client();
     const email = `wannabe-${uniq()}@example.test`;
-    const r = await c.post("/api/auth/signup", { fullName: "Wanna Be", email, password: "Str0ng-Passw0rd!", confirmPassword: "Str0ng-Passw0rd!", organization: { name: `X ${uniq()}`, type: "hospital" }, acceptTerms: true, isPlatformAdmin: true });
+    const r = await c.post("/api/auth/signup", { fullName: "Wanna Be", email, password: "Str0ng-Passw0rd!", confirmPassword: "Str0ng-Passw0rd!", organization: { name: `X ${uniq()}`, type: "hospital" }, facility: registrationFacility(), acceptTerms: true, isPlatformAdmin: true });
     expect(r.status).toBe(201);
     const [u] = await db.select().from(users).where(eq(users.email, email));
     expect(u.isPlatformAdmin).toBe(false);
@@ -81,7 +81,7 @@ describe("organization registration and platform approval", () => {
 
   it("a platform administrator cannot approve an organization they belong to", async () => {
     const p = await platformAdmin();
-    const r = await p.post("/api/auth/create-organization", { organization: { name: `Own Org ${uniq()}`, type: "clinic" } });
+    const r = await p.post("/api/auth/create-organization", { organization: { name: `Own Org ${uniq()}`, type: "clinic" }, facility: registrationFacility() });
     expect(r.status).toBe(201);
     const self = await p.post(`/api/platform/organizations/${r.body.organizationId}/approve`, {});
     expect(self.status).toBe(403);

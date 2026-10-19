@@ -23,7 +23,7 @@ declare module "express-serve-static-core" {
   }
 }
 
-/** "platform" = signed-in platform administrator (reviews organization registrations; not an org role). */
+/** "platform" = signed-in user holding the separate organization-review permission (not an organization role; never granted through the API). */
 export type Access = "public" | "user" | "member" | "platform";
 
 export interface RouteSpec<B extends ZodType | undefined, Q extends ZodType | undefined> {
@@ -92,7 +92,7 @@ export function route<B extends ZodType | undefined = undefined, Q extends ZodTy
       if (k.toLowerCase().endsWith("id") && typeof v === "string" && !uuidRe.test(v)) throw badRequest(`Invalid ${k}.`);
     }
     if (spec.access !== "public" && !req.auth) throw unauthorized();
-    if (spec.access === "platform" && !req.auth!.user.isPlatformAdmin) throw forbidden("Only platform administrators can do this.");
+    if (spec.access === "platform" && !req.auth!.user.isPlatformAdmin) throw forbidden("Only accounts with the organization-review permission can do this.");
     if (spec.access === "member") {
       const m = req.auth!.membership;
       if (!m) throw forbidden("You are not an active member of an organization.");

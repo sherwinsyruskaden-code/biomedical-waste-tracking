@@ -47,7 +47,7 @@ export const statusMeta: Record<BatchStatus, { label: string; tone: "neutral" | 
   segregated: { label: "Segregated", tone: "emerald" },
   collected: { label: "Collected", tone: "signal" },
   in_transit: { label: "In transit", tone: "signal" },
-  delivered: { label: "Delivered", tone: "warn" },
+  delivered: { label: "Arrived — awaiting receipt", tone: "warn" },
   received: { label: "Received", tone: "emerald" },
   disposed: { label: "Disposed", tone: "ink" },
   rejected: { label: "Rejected", tone: "danger" },
@@ -59,6 +59,7 @@ export const assignmentMeta: Record<AssignmentStatus, { label: string; tone: "ne
   accepted: { label: "Accepted", tone: "emerald" },
   in_progress: { label: "On the road", tone: "signal" },
   completed: { label: "Completed", tone: "ink" },
+  declined: { label: "Declined by transporter", tone: "danger" },
   cancelled: { label: "Cancelled", tone: "neutral" },
 };
 
@@ -68,9 +69,10 @@ export const eventLabel: Record<string, string> = {
   segregated: "Segregation verified",
   assigned: "Collection requested — transporter assigned",
   unassigned: "Removed from assignment",
+  declined: "Collection declined by transporter",
   pickup: "Picked up — custody to transporter",
   transit_started: "Trip started",
-  handover: "Handed over at destination",
+  handover: "Arrived at treatment plant — awaiting receipt",
   received: "Receipt confirmed",
   rejected: "Delivery rejected",
   rerouted: "Rerouted to new destination",
@@ -84,4 +86,3 @@ export const disposalMethods = [
   "chemical_disinfection", "deep_burial", "encapsulation", "sharps_pit", "recycling_after_treatment", "other",
 ] as const;
 
-export const incidentTypes = ["spill", "leak", "damaged_container", "wrong_segregation", "weight_discrepancy", "vehicle_breakdown", "delay", "exposure", "other"] as const;

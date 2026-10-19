@@ -1,15 +1,15 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Building2, MapPin, Phone, Plus } from "lucide-react";
+import { Building2, MapPin, Plus } from "lucide-react";
 import { useState } from "react";
-import { useSearchParams } from "react-router";
+import { Navigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { FacilityFields, emptyFacility, facilityPayload, type FacilityDraft } from "../components/FacilityFields";
 import { Badge, Button, CategoryChip, Checkbox, Drawer, EmptyState, ErrorState, Field, FormError, Input, LoadingBlock, Modal, PageHeader, Textarea, fieldError } from "../components/ui";
 import { api } from "../lib/api";
 import { disposalMethods, facilityTypeLabel, humanize } from "../lib/format";
 import { useCategories, useFacilities } from "../lib/queries";
-import { useActor, useWorkplace } from "../lib/session";
+import { useActor } from "../lib/session";
 import type { Category, Facility } from "../lib/types";
 
 function FacilityEditor({ facility, onClose }: { facility: Facility | null; onClose: () => void }) {
@@ -80,52 +80,6 @@ function CategoryEditor({ category, onClose }: { category: Category | null; onCl
   );
 }
 
-/** Non-admins: their own workplace in full, and the facilities they exchange waste with in outline. */
-function MyFacility() {
-  const { isTransporter } = useActor();
-  const work = useWorkplace();
-  const facilities = useFacilities();
-  if (facilities.isLoading) return <LoadingBlock />;
-  if (facilities.isError) return <ErrorState error={facilities.error} />;
-  const own = facilities.data!.filter((f) => f.access === "own");
-  const partners = facilities.data!.filter((f) => f.access === "partner");
-  const partnerRole = (f: Facility) => (f.type === "treatment" ? "Destination — treatment plant" : "Origin — hospital / clinic");
-  const card = (f: Facility, relation: string, outline: boolean) => (
-    <div key={f.id} className={clsx("flex flex-col gap-2 rounded-[16px] border bg-paper p-5", outline ? "border-dashed border-line-2" : "border-emerald-200")} data-testid={outline ? "partner-facility" : "own-facility"}>
-      <span className="flex flex-wrap items-center gap-2">
-        <span className="text-[17px] font-bold">{f.name}</span>
-        <Badge tone={f.type === "treatment" ? "ink" : "emerald"}>{facilityTypeLabel[f.type]}</Badge>
-      </span>
-      <span className="text-[12.5px] font-semibold uppercase tracking-wide text-ink-3">{relation}</span>
-      <span className="text-sm text-ink-2">{f.address}{f.city ? `, ${f.city}` : ""}</span>
-      {f.contactPhone && <a href={`tel:${f.contactPhone}`} className="inline-flex w-fit items-center gap-1 text-sm text-emerald-700"><Phone className="size-3.5" /> {f.contactName ?? "Contact"} {f.contactPhone}</a>}
-      {!outline && f.authorizationRef && <span className="font-mono text-[12.5px] text-ink-3">Authorisation {f.authorizationRef}</span>}
-    </div>
-  );
-  return (
-    <>
-      <PageHeader
-        title={isTransporter ? "Pickup & drop-off points" : "My facility"}
-        description={isTransporter ? "Hospitals and treatment plants on your assigned collections. You see nothing else." : "Where you work, and the facilities your waste moves between. Other hospitals' facilities and records are not visible to you."}
-      />
-      {own.length > 0 && (
-        <section className="mb-8">
-          <h2 className="mb-3 text-[15px] font-bold text-ink-2">Your facility</h2>
-          <div className="grid gap-3 md:grid-cols-2">{own.map((f) => card(f, work.atPlant && f.type === "treatment" ? "You receive and treat waste here" : "You register waste here", false))}</div>
-        </section>
-      )}
-      <section>
-        <h2 className="mb-3 text-[15px] font-bold text-ink-2">{isTransporter ? "On your collections" : "Transfer partners"}</h2>
-        {partners.length === 0 ? (
-          <EmptyState icon={<Building2 />} title="No transfer partners yet">They appear once waste is scheduled to move between your facility and another.</EmptyState>
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2">{partners.map((f) => card(f, partnerRole(f), true))}</div>
-        )}
-      </section>
-    </>
-  );
-}
-
 export default function Facilities() {
   const { isAdmin } = useActor();
   const [params, setParams] = useSearchParams();
@@ -134,7 +88,7 @@ export default function Facilities() {
   const categories = useCategories();
   const [editFac, setEditFac] = useState<Facility | null | "new">(null);
   const [editCat, setEditCat] = useState<Category | null | "new">(null);
-  if (!isAdmin) return <MyFacility />;
+  if (!isAdmin) return <Navigate to="/dashboard" replace />;
   return (
     <>
       <PageHeader

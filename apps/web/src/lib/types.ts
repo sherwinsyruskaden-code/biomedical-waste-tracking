@@ -1,10 +1,10 @@
 export type Role = "admin" | "facility_staff" | "transporter";
 export type BatchStatus = "generated" | "segregated" | "collected" | "in_transit" | "delivered" | "received" | "disposed" | "rejected" | "cancelled";
 export type OrgStatus = "pending" | "approved" | "rejected";
-export type AssignmentStatus = "assigned" | "accepted" | "in_progress" | "completed" | "cancelled";
+export type AssignmentStatus = "assigned" | "accepted" | "in_progress" | "completed" | "cancelled" | "declined";
 
 export interface Me {
-  user: { id: string; email: string; fullName: string; phone: string | null; isPlatformAdmin: boolean; createdAt: string };
+  user: { id: string; email: string; fullName: string; phone: string | null; canReviewOrganizations: boolean; createdAt: string };
   membership: { id: string; organizationId: string; role: Role; facilityIds: string[]; orgStatus: OrgStatus } | null;
   organization: { id: string; name: string; type: string; timezone: string; status: OrgStatus; submittedAt: string; reviewedAt: string | null; reviewNote: string | null } | null;
   memberships: { id: string; organizationId: string; organizationName: string; organizationStatus: OrgStatus; role: Role; status: string }[];
@@ -58,6 +58,7 @@ export interface BatchListItem {
   category: { id: string; code: string; name: string; colorHex: string };
   originName: string;
   destinationName: string | null;
+  transporterName: string | null;
 }
 
 export interface Paged<T> {
@@ -114,6 +115,7 @@ export interface Assignment {
   completedAt: string | null;
   cancelledAt: string | null;
   cancelReason: string | null;
+  declinedAt: string | null;
   createdAt: string;
 }
 
@@ -145,27 +147,11 @@ export interface BatchDetail extends Omit<BatchListItem, "category" | "originNam
   events: CustodyEvent[];
   receipts: { id: string; accepted: boolean; receivedQuantity: number | null; unit: string | null; condition: string; notes: string | null; receivedAt: string; receivedBy: string }[];
   disposal: { method: string; treatedQuantity: number | null; unit: string | null; documentRef: string | null; notes: string | null; disposedAt: string; performedBy: string; facilityName: string } | null;
-  incidents: Incident[];
   currentAssignment: (Assignment & { transporterName: string | null; transporterPhone: string | null }) | null;
-  assignmentHistory: { id: string; reference: string; status: AssignmentStatus; transporterName: string; addedAt: string; removedAt: string | null }[];
+  assignmentHistory: { id: string; reference: string; status: AssignmentStatus; transporterName: string; addedAt: string; removedAt: string | null; declinedAt: string | null; reason: string | null }[];
   availableActions: ActionInfo[];
   /** Present when you could request collection for this batch (origin hospital staff / admin). */
   collectionRequest: { enabled: boolean; reason: string | null; destination: { id: string; name: string } | null } | null;
-}
-
-export interface Incident {
-  id: string;
-  type: string;
-  severity: "low" | "medium" | "high" | "critical";
-  description: string;
-  status: "open" | "resolved";
-  batchId: string | null;
-  assignmentId: string | null;
-  createdAt: string;
-  resolvedAt: string | null;
-  resolutionNotes: string | null;
-  reportedBy?: string | null;
-  trackingCode?: string | null;
 }
 
 export interface Member {

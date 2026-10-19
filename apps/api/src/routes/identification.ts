@@ -27,7 +27,7 @@ route(router, base, {
     value: z.string().trim().min(1).max(500),
     /** Free-text reader name/id when scanned through a hardware reader. */
     readerId: z.string().trim().max(100).optional(),
-    source: z.enum(["camera", "keyboard_wedge", "web_nfc", "manual_entry", "reader_gateway"]).optional(),
+    source: z.enum(["camera", "keyboard_wedge", "web_nfc", "manual_entry", "reader_gateway", "simulated"]).optional(),
   }),
 }, async (ctx) => {
   const a = actorOf(ctx);
@@ -161,11 +161,11 @@ route(router, base, {
 route(router, base, {
   method: "post",
   path: "/demo/batches/:batchId/simulate-scan",
-  summary: "DEMO MODE ONLY: perform pickup / handover with the batch's real QR label, without a camera. Recorded as a simulated scan.",
+  summary: "Sample-data mode only: perform pickup with the batch's real QR label, without a camera. Recorded as a simulated scan.",
   tag: "Identification",
   access: "member",
-  roles: ["transporter", "admin"],
-  body: z.object({ action: z.enum(["pickup", "handover"]) }),
+  roles: ["transporter"],
+  body: z.object({ action: z.enum(["pickup"]) }),
 }, async (ctx) => {
   const a = actorOf(ctx);
   const [org] = await db.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, a.orgId));
@@ -183,7 +183,7 @@ route(router, base, {
   const r = await performAction(a, batch.id, ctx.body.action, {
     scanMethod: "qr",
     identifier: qrPayload(label.token),
-    notes: "Simulated QR scan (demo mode) — no physical label was scanned.",
+    notes: "Simulated QR scan — no physical label was scanned.",
   }, undefined, { simulatedScan: true });
   await audit({ organizationId: a.orgId, actorUserId: a.userId, action: "scan.simulated", entityType: "batch", entityId: batch.id, metadata: { action: ctx.body.action, container: label.label }, ip: a.ip });
   return { batch: { id: r.batch.id, trackingCode: r.batch.trackingCode, status: r.batch.status }, container: label.label, simulated: true };

@@ -4,11 +4,21 @@ import { ArrowLeft, Info } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
-import { Button, EmptyState, Field, FormError, Input, LoadingBlock, PageHeader, Panel, Select, Textarea, fieldError } from "../components/ui";
+import { Button, EmptyState, Field, FormError, Input, LoadingBlock, PageHeader, Panel, Select, fieldError } from "../components/ui";
 import { api } from "../lib/api";
 import { useCategories, useFacilities } from "../lib/queries";
 import { useActor } from "../lib/session";
 import type { BatchDetail } from "../lib/types";
+
+/** Same rule as the API: a plain positive number, at most 3 decimals, no letters or symbols. */
+export function quantityIssue(raw: string): string | null {
+  const q = raw.trim();
+  if (!/^\d+(\.\d{1,3})?$/.test(q)) return /^\d+\.\d{4,}$/.test(q) ? "Use at most 3 decimal places." : "Enter a number, for example 12 or 12.5.";
+  const n = Number(q);
+  if (!Number.isFinite(n) || n <= 0) return "Quantity must be greater than zero.";
+  if (n > 1_000_000) return "Quantity is too large.";
+  return null;
+}
 
 export default function BatchForm() {
   const { id } = useParams();
@@ -20,7 +30,7 @@ export default function BatchForm() {
   const categories = useCategories();
   const existing = useQuery({ queryKey: ["batch", id], queryFn: () => api.get<BatchDetail>(`/api/batches/${id}`), enabled: editing });
 
-  const [form, setForm] = useState({ originFacilityId: "", categoryId: "", quantity: "", unit: "kg", containerCount: "1", containerType: "", sourceArea: "", segregationNotes: "", handlingNotes: "" });
+  const [form, setForm] = useState({ originFacilityId: "", categoryId: "", quantity: "", unit: "kg", containerCount: "1", containerType: "", sourceArea: "" });
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
   const myFacilities = (facilities.data ?? []).filter((f) => (isAdmin || facilityIds.includes(f.id)) && f.type !== "treatment");
@@ -29,7 +39,7 @@ export default function BatchForm() {
   useEffect(() => {
     if (editing && existing.data) {
       const b = existing.data;
-      setForm({ originFacilityId: b.originFacilityId, categoryId: b.categoryId, quantity: String(b.quantity), unit: b.unit, containerCount: String(b.containerCount), containerType: b.containerType ?? "", sourceArea: b.sourceArea ?? "", segregationNotes: b.segregationNotes ?? "", handlingNotes: b.handlingNotes ?? "" });
+      setForm({ originFacilityId: b.originFacilityId, categoryId: b.categoryId, quantity: String(b.quantity), unit: b.unit, containerCount: String(b.containerCount), containerType: b.containerType ?? "", sourceArea: b.sourceArea ?? "" });
     }
   }, [editing, existing.data]);
   useEffect(() => {
@@ -44,12 +54,11 @@ export default function BatchForm() {
         unit: form.unit,
         containerType: form.containerType || null,
         sourceArea: form.sourceArea || null,
-        segregationNotes: form.segregationNotes || null,
-        handlingNotes: form.handlingNotes || null,
       };
       return editing
         ? api.patch<{ id: string; trackingCode: string }>(`/api/batches/${id}`, body)
-        : api.post<{ id: string; trackingCode: string }>("/api/batches", { ...body, originFacilityId: form.originFacilityId, containerCount: Number(form.containerCount) });
+        // The server derives the origin from the signed-in user's facility; it is only sent when they work at several.
+        : api.post<{ id: string; trackingCode: string }>("/api/batches", { ...body, ...(myFacilities.length > 1 ? { originFacilityId: form.originFacilityId } : {}), containerCount: Number(form.containerCount) });
     },
     onSuccess: (b) => {
       qc.invalidateQueries({ queryKey: ["batches"] });
@@ -59,8 +68,8 @@ export default function BatchForm() {
         toast.success("Batch updated");
         navigate(`/batches/${b.id}`);
       } else {
-        toast.success(`Batch ${b.trackingCode} registered`, { description: "Print the labels and attach one to each container." });
-        navigate(`/batches/${b.id}/labels?new=1`);
+        toast.success(`Batch ${b.trackingCode} registered`);
+        navigate(`/batches/${b.id}/qr?new=1`); // its own QR code, shown straight away
       }
     },
   });
@@ -78,8 +87,11 @@ export default function BatchForm() {
 
   const selectedCat = activeCats.find((c) => c.id === form.categoryId);
   const fe = (k: string) => fieldError(save.error, k);
+  const qtyIssue = form.quantity === "" ? null : quantityIssue(form.quantity);
+  const originName = (editing ? existing.data?.origin.name : (facilities.data ?? []).find((f) => f.id === form.originFacilityId)?.name) ?? "—";
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    if (quantityIssue(form.quantity)) return;
     save.mutate();
   };
 
@@ -120,18 +132,35 @@ export default function BatchForm() {
 
           <Panel title="Where and how much">
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Origin (where the waste was produced)" htmlFor="origin" error={fe("originFacilityId")} required>
-                <Select id="origin" value={form.originFacilityId} onChange={(e) => set("originFacilityId", e.target.value)} disabled={editing}>
-                  <option value="">Choose facility…</option>
-                  {(editing ? facilities.data ?? [] : myFacilities).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-                </Select>
-              </Field>
+              {!editing && myFacilities.length > 1 ? (
+                <Field label="Facility" htmlFor="origin" error={fe("originFacilityId")} required>
+                  <Select id="origin" value={form.originFacilityId} onChange={(e) => set("originFacilityId", e.target.value)}>
+                    <option value="">Choose facility…</option>
+                    {myFacilities.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+                  </Select>
+                </Field>
+              ) : (
+                <div>
+                  <p className="text-[14px] font-semibold text-ink">Origin</p>
+                  <p className="mt-1.5 rounded-[10px] bg-mist px-3 py-2.5 text-sm font-medium text-ink" data-testid="batch-origin">{originName}</p>
+                </div>
+              )}
               <Field label="Ward / department" htmlFor="area" hint="No patient details." error={fe("sourceArea")}>
                 <Input id="area" value={form.sourceArea} onChange={(e) => set("sourceArea", e.target.value)} placeholder="e.g. Ward 3, OT-2, Pathology" />
               </Field>
               <div className="grid grid-cols-[1fr_120px] gap-2">
-                <Field label="Quantity" htmlFor="qty" error={fe("quantity")} required>
-                  <Input id="qty" inputMode="decimal" type="number" min="0" step="0.01" value={form.quantity} onChange={(e) => set("quantity", e.target.value)} />
+                <Field label="Quantity" htmlFor="qty" error={qtyIssue ?? fe("quantity")} required>
+                  <Input
+                    id="qty"
+                    inputMode="decimal"
+                    type="number"
+                    min="0.001"
+                    step="any"
+                    value={form.quantity}
+                    invalid={!!qtyIssue}
+                    onKeyDown={(e) => { if (["e", "E", "+", "-"].includes(e.key)) e.preventDefault(); }}
+                    onChange={(e) => set("quantity", e.target.value)}
+                  />
                 </Field>
                 <Field label="Unit" htmlFor="unit">
                   <Select id="unit" value={form.unit} onChange={(e) => set("unit", e.target.value)}>
@@ -151,31 +180,22 @@ export default function BatchForm() {
             </div>
           </Panel>
 
-          <Panel title="Notes">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Segregation notes" htmlFor="seg">
-                <Textarea id="seg" value={form.segregationNotes} onChange={(e) => set("segregationNotes", e.target.value)} placeholder="Anything the checker should know" />
-              </Field>
-              <Field label="Handling instructions" htmlFor="hand">
-                <Textarea id="hand" value={form.handlingNotes} onChange={(e) => set("handlingNotes", e.target.value)} placeholder="e.g. Heavy — two-person lift" />
-              </Field>
-            </div>
-          </Panel>
         </div>
 
         <aside className="lg:sticky lg:top-24 lg:self-start">
           <div className="flex flex-col gap-4 rounded-[18px] border border-line bg-paper p-5">
             <h2 className="text-[17px] font-bold">{editing ? "Save changes" : "Ready to register?"}</h2>
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
+              <dt className="text-ink-3">Origin</dt><dd className="font-semibold">{originName}</dd>
               <dt className="text-ink-3">Category</dt><dd className="font-semibold">{selectedCat?.code ?? "—"}</dd>
               <dt className="text-ink-3">Quantity</dt><dd className="font-semibold">{form.quantity ? `${form.quantity} ${form.unit}` : "—"}</dd>
               <dt className="text-ink-3">Labels</dt><dd className="font-semibold">{form.containerCount || "—"}</dd>
             </dl>
             <FormError error={save.error} />
-            <Button type="submit" size="lg" loading={save.isPending} disabled={!form.categoryId || !form.quantity || !form.originFacilityId}>
+            <Button type="submit" size="lg" loading={save.isPending} disabled={!form.categoryId || !form.quantity || !!quantityIssue(form.quantity) || (!editing && !form.originFacilityId)}>
               {editing ? "Save changes" : "Register & create labels"}
             </Button>
-            <p className="text-[12.5px] text-ink-3">Registering starts the custody record with you as the responsible person. The destination is set when you request collection: your organization's authorised treatment plant.</p>
+            <p className="text-[12.5px] text-ink-3">The destination is set when you request collection.</p>
           </div>
         </aside>
       </form>

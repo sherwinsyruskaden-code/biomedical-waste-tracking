@@ -20,7 +20,8 @@ const Labels = lazy(() => import("./pages/Labels"));
 const Assignments = lazy(() => import("./pages/Assignments"));
 const AssignmentDetail = lazy(() => import("./pages/AssignmentDetail"));
 const Receiving = lazy(() => import("./pages/Receiving"));
-const Alerts = lazy(() => import("./pages/Alerts"));
+const Notifications = lazy(() => import("./pages/Notifications"));
+const BatchQr = lazy(() => import("./pages/BatchQr"));
 const Team = lazy(() => import("./pages/Team"));
 const Facilities = lazy(() => import("./pages/Facilities"));
 const Settings = lazy(() => import("./pages/Settings"));
@@ -37,7 +38,7 @@ const ResetPassword = lazy(() => import("./pages/auth/Login").then((m) => ({ def
 const DemoLabels = lazy(() => import("./pages/DemoLabels"));
 const Tracking = lazy(() => import("./pages/Tracking"));
 const Reports = lazy(() => import("./pages/Reports"));
-const Platform = lazy(() => import("./pages/Platform"));
+const Approvals = lazy(() => import("./pages/Approvals"));
 const PendingApproval = lazy(() => import("./pages/PendingApproval"));
 const EnterInvite = lazy(() => import("./pages/auth/AcceptInvite").then((m) => ({ default: m.EnterInvite })));
 
@@ -74,17 +75,8 @@ function RequireMember({ children }: { children: ReactNode }) {
   const loc = useLocation();
   if (isLoading) return <FullPageLoading />;
   if (!data) return <Navigate to={`/login?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
-  if (!data.membership) return <Navigate to={data.user.isPlatformAdmin ? "/platform" : "/onboarding"} replace />;
+  if (!data.membership) return <Navigate to="/onboarding" replace />;
   if (data.membership.orgStatus !== "approved") return <PendingApproval />; // registration under platform review (or rejected)
-  return <>{children}</>;
-}
-
-/** Platform administrators only (organization review). */
-function RequirePlatformAdmin({ children }: { children: ReactNode }) {
-  const { data, isLoading } = useMe();
-  if (isLoading) return <FullPageLoading />;
-  if (!data) return <Navigate to="/login?next=%2Fplatform" replace />;
-  if (!data.user.isPlatformAdmin) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
 }
 
@@ -92,6 +84,13 @@ function RequireUser({ children }: { children: ReactNode }) {
   const { data, isLoading } = useMe();
   if (isLoading) return <FullPageLoading />;
   if (!data) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
+/** Organization approvals: org admins who hold the separate review permission (the API enforces it too). */
+function RequireReviewer({ children }: { children: ReactNode }) {
+  const { data } = useMe();
+  if (!data?.membership || data.membership.role !== "admin" || !data.user.canReviewOrganizations) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
 }
 
@@ -120,7 +119,7 @@ const router = createBrowserRouter([
   { path: "/reset-password", element: <ResetPassword /> },
   { path: "/invite", element: <EnterInvite /> },
   { path: "/invite/:token", element: <AcceptInvite /> },
-  { path: "/platform", element: <RequirePlatformAdmin><Platform /></RequirePlatformAdmin>, errorElement: <RouteError /> },
+  { path: "/platform", element: <Navigate to="/approvals" replace /> },
   { path: "/terms", element: <Terms /> },
   { path: "/onboarding", element: <RequireUser><Onboarding /></RequireUser> },
   { path: "/s/:token", element: <RequireMember><ScanResolver /></RequireMember> },
@@ -138,14 +137,17 @@ const router = createBrowserRouter([
       { path: "/batches/:id", element: <BatchDetail /> },
       { path: "/batches/:id/edit", element: <BatchForm /> },
       { path: "/batches/:id/labels", element: <Labels /> },
+      { path: "/batches/:id/qr", element: <BatchQr /> },
       { path: "/scan", element: <Scan /> },
       { path: "/demo-labels", element: <DemoLabels /> },
       { path: "/tracking", element: lazyPage(<Tracking />) },
       { path: "/assignments", element: <Assignments /> },
       { path: "/assignments/:id", element: <AssignmentDetail /> },
       { path: "/receiving", element: <Receiving /> },
-      { path: "/alerts", element: <Alerts /> },
+      { path: "/notifications", element: <Notifications /> },
+      { path: "/alerts", element: <Navigate to="/notifications" replace /> },
       { path: "/reports", element: lazyPage(<Reports />) },
+      { path: "/approvals", element: <RequireReviewer><Approvals /></RequireReviewer> },
       { path: "/team", element: <Team /> },
       { path: "/facilities", element: <Facilities /> },
       { path: "/settings", element: <Settings /> },

@@ -1,15 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AlertOctagon, ArrowLeft, Ban, FlaskConical, MapPin, Pencil, Printer, Radio, ScanLine, Send, Truck } from "lucide-react";
+import { ArrowLeft, Ban, FlaskConical, MapPin, Pencil, Printer, QrCode, Radio, ScanLine, Send, Truck } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { ActionDialog } from "../components/ActionDialog";
-import { IncidentDialog } from "../components/IncidentDialog";
 import { toast } from "sonner";
-import { Badge, Button, CategoryChip, ErrorState, Field, FormError, LoadingBlock, Modal, Panel, StatusBadge, Textarea } from "../components/ui";
+import { Badge, Button, CategoryChip, ErrorState, Field, FormError, LoadingBlock, Modal, Panel, Select, StatusBadge, Textarea, fieldError } from "../components/ui";
 import { api } from "../lib/api";
 import { assignmentMeta, eventLabel, fmtDateTime, fmtQty, humanize, lifecycle, roleLabel, statusMeta } from "../lib/format";
-import { useActor } from "../lib/session";
+import { useActor, useWorkplace } from "../lib/session";
 import type { ActionInfo, BatchDetail as Detail, CustodyEvent } from "../lib/types";
 
 function CustodyRail({ b }: { b: Detail }) {
@@ -61,7 +60,7 @@ function Custodian({ b }: { b: Detail }) {
 
 function TimelineItem({ e, last }: { e: CustodyEvent; last: boolean }) {
   const transfer = e.toCustodianUser || e.toCustodianFacility;
-  const tone = e.eventType === "rejected" || e.eventType === "incident" || e.eventType === "cancelled" ? "danger" : e.eventType === "disposed" ? "ink" : transfer ? "signal" : "emerald";
+  const tone = e.eventType === "rejected" || e.eventType === "incident" || e.eventType === "cancelled" || e.eventType === "declined" ? "danger" : e.eventType === "disposed" ? "ink" : transfer ? "signal" : "emerald";
   return (
     <li className="relative flex gap-4 pb-6">
       {!last && <span className="absolute left-[9px] top-6 h-[calc(100%-12px)] w-[2px] bg-line" aria-hidden />}
@@ -83,7 +82,7 @@ function TimelineItem({ e, last }: { e: CustodyEvent; last: boolean }) {
         )}
         <div className="mt-1.5 flex flex-wrap gap-1.5">
           {e.scanMethod && (e.details?.simulatedScan ? (
-            <Badge tone="warn"><FlaskConical className="size-3" /> Simulated QR scan (demo)</Badge>
+            <Badge tone="warn"><FlaskConical className="size-3" /> Simulated QR scan</Badge>
           ) : (
             <Badge tone={e.scanMethod === "manual" ? "warn" : "neutral"}>{e.scanMethod === "manual" ? "Recorded without scan" : `${e.scanMethod.toUpperCase()} scan`}</Badge>
           ))}
@@ -108,20 +107,32 @@ function TimelineItem({ e, last }: { e: CustodyEvent; last: boolean }) {
   );
 }
 
-/** Hospital staff ask for collection; the destination is the organization's configured treatment plant. */
+interface TransporterOption {
+  userId: string;
+  fullName: string;
+  phone: string | null;
+  vehicleReg: string | null;
+}
+
+/** Hospital staff ask for collection and choose the transporter; the destination is the configured treatment plant. */
 function RequestCollection({ b }: { b: Detail }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [notes, setNotes] = useState("");
+  const [transporter, setTransporter] = useState("");
+  // Availability changes with every assignment, acceptance, decline and completion, so it is fetched fresh each time the dialog opens.
+  const transporters = useQuery({ queryKey: ["batch", b.id, "transporters"], queryFn: () => api.get<{ items: TransporterOption[]; total: number; busy: number }>(`/api/batches/${b.id}/transporters`), enabled: open, staleTime: 0, refetchOnMount: "always", gcTime: 0 });
   const m = useMutation({
-    mutationFn: () => api.post<{ reference: string }>(`/api/batches/${b.id}/request-collection`, { notes: notes || null }),
+    mutationFn: () => api.post<{ reference: string }>(`/api/batches/${b.id}/request-collection`, { notes: notes || null, transporterUserId: transporter }),
     onSuccess: (a) => {
-      toast.success(`Collection requested (${a.reference})`, { description: "A transporter has been assigned and notified." });
+      toast.success(`Collection requested (${a.reference})`, { description: "The transporter you chose has been notified." });
       setOpen(false);
-      for (const k of ["batch", "batches", "assignments", "dashboard"]) qc.invalidateQueries({ queryKey: [k] });
+      for (const k of ["batch", "batches", "assignments", "dashboard", "transporters"]) qc.invalidateQueries({ queryKey: [k] });
     },
   });
   const r = b.collectionRequest!;
+  const none = transporters.isSuccess && transporters.data.items.length === 0;
+  const nobodyAtAll = transporters.isSuccess && transporters.data.total === 0;
   return (
     <>
       <div className="flex flex-wrap items-center gap-3 rounded-[14px] border border-emerald-200 bg-emerald-50/60 p-4" data-testid="request-collection">
@@ -129,20 +140,33 @@ function RequestCollection({ b }: { b: Detail }) {
           <p className="font-semibold text-ink">Ready to send for treatment?</p>
           <p className="text-ink-2">Destination: <strong>{r.destination?.name ?? "not configured"}</strong>{r.reason ? <span className="block text-ink-3">{r.reason}</span> : null}</p>
         </div>
-        <Button onClick={() => setOpen(true)} disabled={!r.enabled} icon={<Send className="size-4" />}>Request collection</Button>
+        <Button onClick={() => { setTransporter(""); m.reset(); setOpen(true); }} disabled={!r.enabled} icon={<Send className="size-4" />}>Request collection</Button>
       </div>
-      <Modal open={open} onOpenChange={setOpen} title="Request collection" description={`${b.trackingCode} will be collected by a transporter and taken to ${r.destination?.name}.`}>
+      <Modal open={open} onOpenChange={setOpen} title="Request collection" description={`${b.trackingCode} will be taken to ${r.destination?.name}.`}>
         <form onSubmit={(e) => { e.preventDefault(); m.mutate(); }} className="flex flex-col gap-4">
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-[12px] bg-mist p-3 text-sm">
             <dt className="text-ink-3">Origin</dt><dd className="font-semibold">{b.origin.name}</dd>
             <dt className="text-ink-3">Destination</dt><dd className="font-semibold">{r.destination?.name}</dd>
-            <dt className="text-ink-3">Transporter</dt><dd>Assigned automatically — they must accept</dd>
           </dl>
+          <Field label="Assign transporter" htmlFor="rct" required error={fieldError(m.error, "transporterUserId")}>
+            {transporters.isLoading ? <LoadingBlock rows={1} /> : none ? (
+              <p className="rounded-[10px] bg-warn-soft/60 px-3 py-2.5 text-sm" role="status" data-testid="no-transporter">{nobodyAtAll ? "Your organization has no transporter yet. Ask your organization admin to add one." : "No transporter is available right now: each one has an active order. Try again when one finishes."}</p>
+            ) : (
+              <Select id="rct" value={transporter} onChange={(e) => setTransporter(e.target.value)}>
+                <option value="">Choose a transporter…</option>
+                {(transporters.data?.items ?? []).map((t) => (
+                  <option key={t.userId} value={t.userId}>
+                    {t.fullName}{t.vehicleReg ? ` · ${t.vehicleReg}` : ""}{t.phone ? ` · ${t.phone}` : ""} · available
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
           <Field label="Note for the transporter (optional)" htmlFor="rcn"><Textarea id="rcn" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. Collect from the loading bay behind Block C" /></Field>
           <FormError error={m.error} />
           <div className="flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button type="submit" loading={m.isPending} icon={<Send className="size-4" />}>Send request</Button>
+            <Button type="submit" loading={m.isPending} disabled={!transporter || none} icon={<Send className="size-4" />}>Send request</Button>
           </div>
         </form>
       </Modal>
@@ -152,14 +176,17 @@ function RequestCollection({ b }: { b: Detail }) {
 
 export default function BatchDetail() {
   const { id = "" } = useParams();
-  const { isTransporter } = useActor();
+  const { isTransporter, isAdmin } = useActor();
+  const { atHospital } = useWorkplace();
+  const showQr = atHospital && !isAdmin; // hospital staff generate and show the batch's QR
   const q = useQuery({ queryKey: ["batch", id], queryFn: () => api.get<Detail>(`/api/batches/${id}`) });
   const [dialog, setDialog] = useState<ActionInfo["action"] | null>(null);
-  const [incident, setIncident] = useState(false);
 
   if (q.isLoading) return <LoadingBlock rows={8} />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
   const b = q.data!;
+  const last = b.assignmentHistory.at(-1);
+  const declined = !b.currentAssignment && last?.status === "declined" ? last : null; // the latest request was declined and nothing replaced it
   const enabled = b.availableActions.filter((a) => a.enabled);
   const blocked = b.availableActions.filter((a) => !a.enabled);
   const primary = enabled.find((a) => a.action !== "cancel");
@@ -183,9 +210,9 @@ export default function BatchDetail() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {!isTransporter && <Link to={`/batches/${b.id}/labels`} className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-line-2 bg-paper px-4 text-sm font-semibold hover:border-emerald-600"><Printer className="size-4" /> Labels</Link>}
+          {showQr && <Link to={`/batches/${b.id}/qr`} className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700"><QrCode className="size-4" /> View QR Code</Link>}
+          {showQr && <Link to={`/batches/${b.id}/labels`} className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-line-2 bg-paper px-4 text-sm font-semibold hover:border-emerald-600"><Printer className="size-4" /> Print QR Label</Link>}
           {b.status === "generated" && !isTransporter && !b.currentAssignmentId && <Link to={`/batches/${b.id}/edit`} className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-line-2 bg-paper px-4 text-sm font-semibold hover:border-emerald-600"><Pencil className="size-4" /> Edit</Link>}
-          {b.status !== "disposed" && b.status !== "cancelled" && <Button variant="secondary" onClick={() => setIncident(true)} icon={<AlertOctagon className="size-4" />}>Report incident</Button>}
         </div>
       </header>
 
@@ -193,6 +220,11 @@ export default function BatchDetail() {
         <div className="flex flex-col gap-5">
           <Panel>
             <CustodyRail b={b} />
+            {declined && (
+              <p className="mt-5 rounded-[14px] border border-danger/30 bg-danger-soft/40 px-4 py-3 text-sm" role="status" data-testid="declined-collection">
+                <strong>Collection declined by {declined.transporterName}</strong>{declined.declinedAt ? ` on ${fmtDateTime(declined.declinedAt)}` : ""}{declined.reason ? `: “${declined.reason}”` : ""}. It is no longer waiting for them to accept{b.collectionRequest ? "; request collection again and choose an available transporter." : "."}
+              </p>
+            )}
             {b.collectionRequest && <div className="mt-5"><RequestCollection b={b} /></div>}
             {(enabled.length > 0 || blocked.length > 0) && (
               <div className="mt-5 flex flex-col gap-3 border-t border-line pt-5">
@@ -237,12 +269,6 @@ export default function BatchDetail() {
               {b.containerType && <><dt className="text-ink-3">Container</dt><dd>{b.containerType}</dd></>}
               <dt className="text-ink-3">Segregation</dt><dd>{b.segregationVerified ? "Verified" : "Not yet verified"}</dd>
             </dl>
-            {(b.segregationNotes || b.handlingNotes) && (
-              <div className="mt-4 space-y-2 text-sm">
-                {b.handlingNotes && <p className="rounded-[10px] bg-warn-soft/60 px-3 py-2"><strong>Handling:</strong> {b.handlingNotes}</p>}
-                {b.segregationNotes && <p className="rounded-[10px] bg-mist px-3 py-2"><strong>Segregation:</strong> {b.segregationNotes}</p>}
-              </div>
-            )}
           </Panel>
 
           {b.currentAssignment && (
@@ -299,24 +325,10 @@ export default function BatchDetail() {
               </dl>
             </Panel>
           )}
-
-          {b.incidents.length > 0 && (
-            <Panel title="Incidents">
-              <ul className="flex flex-col gap-3 text-sm">
-                {b.incidents.map((i) => (
-                  <li key={i.id}>
-                    <div className="flex items-center gap-2"><span className="font-semibold">{humanize(i.type)}</span><Badge tone={i.status === "open" ? (i.severity === "high" || i.severity === "critical" ? "danger" : "warn") : "neutral"}>{i.status === "open" ? i.severity : "resolved"}</Badge></div>
-                    <p className="text-ink-2">{i.description}</p>
-                  </li>
-                ))}
-              </ul>
-            </Panel>
-          )}
         </aside>
       </div>
 
       {dialog && <ActionDialog open action={dialog} target={b} onOpenChange={(o) => !o && setDialog(null)} />}
-      {incident && <IncidentDialog open onOpenChange={setIncident} batchId={b.id} context={`Batch ${b.trackingCode}`} />}
     </>
   );
 }

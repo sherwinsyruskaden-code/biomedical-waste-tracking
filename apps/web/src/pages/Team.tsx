@@ -11,8 +11,8 @@ import type { Member, Role } from "../lib/types";
 
 const roleHelp: Record<Role, string> = {
   admin: "Full access: facilities, team, assignments, reports.",
-  facility_staff: "Registers, labels and receives waste at the facilities you tick below.",
-  transporter: "Sees only their own jobs; scans pickups and shares location.",
+  facility_staff: "Works at the facilities you tick below.",
+  transporter: "Sees only their own collections and shares location.",
 };
 
 function FacilityPicker({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
@@ -57,7 +57,7 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
         <form onSubmit={(e) => { e.preventDefault(); m.mutate(); }} className="flex flex-col gap-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Email" htmlFor="ie" error={fieldError(m.error, "email")} required><Input id="ie" type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
-            <Field label="Name (optional)" htmlFor="in"><Input id="in" value={fullName} onChange={(e) => setFullName(e.target.value)} /></Field>
+            <Field label="Name" htmlFor="in"><Input id="in" value={fullName} onChange={(e) => setFullName(e.target.value)} /></Field>
           </div>
           <Field label="Role" htmlFor="ir" hint={roleHelp[role]}>
             <Select id="ir" value={role} onChange={(e) => setRole(e.target.value as Role)}>

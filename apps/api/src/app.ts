@@ -151,7 +151,7 @@ function buildOpenApi() {
     paths[p][r.method] = {
       summary: r.summary,
       tags: [r.tag],
-      description: `Access: ${r.access === "public" ? "public" : r.access === "user" ? "signed-in user" : r.access === "platform" ? "platform administrator" : `member of an approved organization${r.roles ? ` (${r.roles.join(", ")})` : ""}`}`,
+      description: `Access: ${r.access === "public" ? "public" : r.access === "user" ? "signed-in user" : r.access === "platform" ? "organization-review permission" : `member of an approved organization${r.roles ? ` (${r.roles.join(", ")})` : ""}`}`,
       parameters: params,
       ...(r.body ? { requestBody: { required: true, content: { "application/json": { schema: toJson(r.body) } } } } : {}),
       responses: {

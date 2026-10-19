@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import QRCode from "qrcode";
 import { z } from "zod";
@@ -13,7 +13,6 @@ import {
   custodyEvents,
   disposalRecords,
   facilities,
-  incidents,
   organizations,
   quantityUnitEnum,
   receiptRecords,
@@ -29,31 +28,67 @@ import { publish } from "../lib/events.js";
 import { actorOf, route, zId, zOptionalText, zPage, type Actor } from "../lib/http.js";
 import { createQrIdentifier, qrPayload } from "../services/identification.js";
 import { actionNames, availableActions, canView, performAction, transporterHadBatch, visibilityFilter } from "../services/lifecycle.js";
-import { collectionDestination, requestCollection } from "../services/assignments.js";
+import { collectionDestination, eligibleTransporters, requestCollection } from "../services/assignments.js";
 import { readSettings } from "../services/settings.js";
+import { DEMO_ORG_NAME } from "../services/demo.js";
+import { env } from "../env.js";
 
 export const router = Router();
 const base = "/api";
 
+const curAsg = alias(assignments, "cur_asg");
+const trUser = alias(users, "tr_user");
 const origin = alias(facilities, "origin");
 const dest = alias(facilities, "dest");
 
+/**
+ * Quantity is a finite JSON number, greater than zero, with at most 3 decimals (the column is numeric(12,3)).
+ * Strings such as "abc" or "12kg", null, NaN and Infinity (e.g. 1e999) are all rejected.
+ */
+export const zQuantity = z
+  .number({ error: "Quantity must be a number" })
+  .refine(Number.isFinite, "Quantity must be a valid number")
+  .refine((q) => q > 0, "Quantity must be greater than zero")
+  .refine((q) => q <= 1_000_000, "Quantity is too large")
+  .refine((q) => Math.abs(Math.round(q * 1000) / 1000 - q) < 1e-9, "Use at most 3 decimal places");
+
 const batchCreate = z.object({
-  originFacilityId: zId,
+  /** Optional: normally derived from the signed-in user's facility. Only needed when they work at several. */
+  originFacilityId: zId.optional(),
   categoryId: zId,
-  quantity: z.number().positive("Quantity must be greater than zero").max(1_000_000),
+  quantity: zQuantity,
   unit: z.enum(quantityUnitEnum.enumValues),
   containerCount: z.number().int().min(1).max(50).default(1),
   containerType: zOptionalText(80),
   sourceArea: zOptionalText(120),
-  segregationNotes: zOptionalText(2000),
-  handlingNotes: zOptionalText(2000),
 });
 
 /**
  * Batches are registered without a destination: it is set when collection is requested, from the
  * organization's configured treatment plant (see services/assignments.ts › requestCollection).
  */
+/**
+ * The origin comes from the signed-in user, never from trust in the client: staff register waste at the
+ * hospital they are assigned to (if they have several, they must name one of them), and an admin at the
+ * organization's only generating facility (or a named one when there are several).
+ */
+async function resolveOrigin(actor: Actor, requestedId: string | undefined) {
+  const own = await db
+    .select()
+    .from(facilities)
+    .where(and(eq(facilities.organizationId, actor.orgId), eq(facilities.active, true), ne(facilities.type, "treatment")));
+  const allowed = actor.role === "admin" ? own : own.filter((f) => actor.facilityIds.includes(f.id));
+  if (requestedId) {
+    const hit = allowed.find((f) => f.id === requestedId);
+    if (hit) return hit;
+    if (actor.role === "facility_staff") throw forbidden("You can only register waste at the hospital you are assigned to.");
+    throw badRequest("Origin facility not found.", { fields: { originFacilityId: "Not found" } });
+  }
+  if (allowed.length === 1) return allowed[0];
+  if (allowed.length === 0) throw forbidden(actor.role === "admin" ? "Add a hospital or clinic facility before registering waste." : "You are not assigned to a hospital, so you cannot register waste. Ask your organization admin.");
+  throw badRequest("You work at more than one facility. Choose where this waste was produced.", { fields: { originFacilityId: "Choose a facility" } });
+}
+
 async function validateRefs(actor: Actor, b: { originFacilityId: string; categoryId: string }) {
   const [o] = await db.select().from(facilities).where(and(eq(facilities.id, b.originFacilityId), eq(facilities.organizationId, actor.orgId), eq(facilities.active, true)));
   if (!o) throw badRequest("Origin facility not found.", { fields: { originFacilityId: "Not found" } });
@@ -65,7 +100,8 @@ async function validateRefs(actor: Actor, b: { originFacilityId: string; categor
 
 route(router, base, { method: "post", path: "/batches", summary: "Register a new waste batch (creates containers + QR labels)", tag: "Batches", access: "member", roles: ["admin", "facility_staff"], body: batchCreate }, async (ctx) => {
   const a = actorOf(ctx);
-  const b = ctx.body;
+  const origin = await resolveOrigin(a, ctx.body.originFacilityId);
+  const b = { ...ctx.body, originFacilityId: origin.id };
   await validateRefs(a, b);
   const [org] = await db.select({ settings: organizations.settings }).from(organizations).where(eq(organizations.id, a.orgId));
   const settings = readSettings(org.settings);
@@ -89,8 +125,6 @@ route(router, base, { method: "post", path: "/batches", summary: "Register a new
           containerCount: b.containerCount,
           containerType: b.containerType,
           sourceArea: b.sourceArea,
-          segregationNotes: b.segregationNotes,
-          handlingNotes: b.handlingNotes,
           responsibleUserId: a.userId,
           currentCustodianFacilityId: b.originFacilityId,
           collectionDueAt: new Date(now.getTime() + settings.collectionOverdueHours * 3600_000),
@@ -169,11 +203,15 @@ route(router, base, { method: "get", path: "/batches", summary: "Search and filt
       category: { id: wasteCategories.id, code: wasteCategories.code, name: wasteCategories.name, colorHex: wasteCategories.colorHex },
       originName: origin.name,
       destinationName: dest.name,
+      transporterName: trUser.fullName,
+      assignmentStatus: curAsg.status,
     })
     .from(wasteBatches)
     .innerJoin(wasteCategories, eq(wasteCategories.id, wasteBatches.categoryId))
     .innerJoin(origin, eq(origin.id, wasteBatches.originFacilityId))
     .leftJoin(dest, eq(dest.id, wasteBatches.destinationFacilityId))
+    .leftJoin(curAsg, eq(curAsg.id, wasteBatches.currentAssignmentId))
+    .leftJoin(trUser, eq(trUser.id, curAsg.transporterUserId))
     .where(where)
     .orderBy(q.sort === "newest" ? desc(wasteBatches.createdAt) : asc(wasteBatches.createdAt))
     .limit(q.pageSize)
@@ -256,9 +294,8 @@ route(router, base, { method: "get", path: "/batches/:batchId", summary: "Batch 
     .innerJoin(users, eq(users.id, disposalRecords.performedById))
     .innerJoin(facilities, eq(facilities.id, disposalRecords.facilityId))
     .where(eq(disposalRecords.batchId, batch.id));
-  const batchIncidents = await db.select().from(incidents).where(eq(incidents.batchId, batch.id)).orderBy(desc(incidents.createdAt));
   const history = await db
-    .select({ id: assignments.id, reference: assignments.reference, status: assignments.status, transporterName: users.fullName, addedAt: assignmentBatches.addedAt, removedAt: assignmentBatches.removedAt })
+    .select({ id: assignments.id, reference: assignments.reference, status: assignments.status, transporterName: users.fullName, addedAt: assignmentBatches.addedAt, removedAt: assignmentBatches.removedAt, declinedAt: assignments.declinedAt, reason: assignments.cancelReason })
     .from(assignmentBatches)
     .innerJoin(assignments, eq(assignments.id, assignmentBatches.assignmentId))
     .innerJoin(users, eq(users.id, assignments.transporterUserId))
@@ -279,7 +316,6 @@ route(router, base, { method: "get", path: "/batches/:batchId", summary: "Batch 
     events,
     receipts: receipts.map((r) => ({ ...r.r, receivedBy: r.receivedBy })),
     disposal: disposal ? { ...disposal.d, performedBy: disposal.performedBy, facilityName: disposal.facilityName } : null,
-    incidents: batchIncidents,
     currentAssignment,
     assignmentHistory: history,
     availableActions: availableActions({ batch, actor: a, assignment }),
@@ -301,13 +337,28 @@ async function collectionPreview(a: Actor, batch: typeof wasteBatches.$inferSele
 }
 
 route(router, base, {
+  method: "get",
+  path: "/batches/:batchId/transporters",
+  summary: "Transporters the origin hospital may choose for this batch's collection",
+  tag: "Lifecycle",
+  access: "member",
+  roles: ["admin", "facility_staff"],
+}, async (ctx) => {
+  const a = actorOf(ctx);
+  const [batch] = await db.select().from(wasteBatches).where(and(eq(wasteBatches.id, ctx.params.batchId), eq(wasteBatches.organizationId, a.orgId)));
+  const atOrigin = !!batch && (a.role === "admin" || a.facilityIds.includes(batch.originFacilityId));
+  if (!atOrigin) throw notFound("Batch"); // same answer for "missing" and "not yours"
+  return eligibleTransporters(a.orgId); // { items: free transporters, total, busy }
+});
+
+route(router, base, {
   method: "post",
   path: "/batches/:batchId/request-collection",
   summary: "Hospital staff: request collection of a segregated batch. Goes to the configured treatment plant; a transporter is assigned and must accept.",
   tag: "Lifecycle",
   access: "member",
   roles: ["admin", "facility_staff"],
-  body: z.object({ notes: zOptionalText(1000) }),
+  body: z.object({ notes: zOptionalText(1000), transporterUserId: zId.optional() }),
 }, async (ctx) => {
   const asg = await requestCollection(actorOf(ctx), ctx.params.batchId, ctx.body);
   ctx.res.status(201);
@@ -329,11 +380,11 @@ route(router, base, {
     const [batch] = await tx.select().from(wasteBatches).where(and(eq(wasteBatches.id, ctx.params.batchId), eq(wasteBatches.organizationId, a.orgId))).for("update");
     if (!batch || !canView(a, batch, null)) throw notFound("Batch");
     if (a.role === "facility_staff" && !a.facilityIds.includes(batch.originFacilityId)) throw forbidden("Only origin-facility staff can edit this batch.");
-    if (batch.status !== "generated") throw invalidTransition("A batch can only be edited before segregation is verified. Report an incident to correct later records.");
+    if (batch.status !== "generated") throw invalidTransition("A batch can only be edited before segregation is verified. Cancel the batch and register it again to correct later records.");
     if (batch.currentAssignmentId) throw invalidTransition("Remove the batch from its assignment before editing.");
     await validateRefs(a, { originFacilityId: batch.originFacilityId, categoryId: b.categoryId });
     const changes: Record<string, { from: unknown; to: unknown }> = {};
-    for (const k of ["categoryId", "quantity", "unit", "containerType", "sourceArea", "segregationNotes", "handlingNotes"] as const) {
+    for (const k of ["categoryId", "quantity", "unit", "containerType", "sourceArea"] as const) {
       const before = batch[k] ?? null;
       const after = (b as Record<string, unknown>)[k] ?? null;
       if (before !== after) changes[k] = { from: before, to: after };
@@ -364,7 +415,25 @@ route(router, base, {
   if (!(actionNames as readonly string[]).includes(action)) throw badRequest(`Unknown action. Use one of: ${actionNames.join(", ")}.`);
   const key = ctx.req.get("idempotency-key");
   if (key && !/^[A-Za-z0-9_-]{8,100}$/.test(key)) throw badRequest("Invalid Idempotency-Key header.");
-  const r = await performAction(a, ctx.params.batchId, action as (typeof actionNames)[number], ctx.req.body, key);
+  let body = ctx.req.body;
+  let simulatedScan = false;
+  if (body?.simulatedScan === true) {
+    // Sample organization only: use this batch's own QR without a camera. Same permissions and checks; recorded as simulated.
+    const [org] = await db.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, a.orgId));
+    if (!env.DEMO_MODE || org?.name !== DEMO_ORG_NAME) throw notFound("Endpoint");
+    const { batch } = await loadVisibleBatch(a, ctx.params.batchId);
+    const [label] = await db
+      .select({ token: containerIdentifiers.value })
+      .from(containers)
+      .innerJoin(containerIdentifiers, and(eq(containerIdentifiers.containerId, containers.id), eq(containerIdentifiers.method, "qr"), eq(containerIdentifiers.active, true)))
+      .where(eq(containers.batchId, batch.id))
+      .orderBy(asc(containers.sequence))
+      .limit(1);
+    if (!label) throw badRequest("This batch has no QR label to scan.");
+    body = { ...body, scanMethod: "qr", identifier: qrPayload(label.token) };
+    simulatedScan = true;
+  }
+  const r = await performAction(a, ctx.params.batchId, action as (typeof actionNames)[number], body, key, { simulatedScan });
   return { ...r.batch, replayed: r.replayed };
 });
 
@@ -391,6 +460,8 @@ route(router, base, { method: "get", path: "/batches/:batchId/labels", summary: 
   );
   await audit({ organizationId: a.orgId, actorUserId: a.userId, action: "batch.labels_viewed", entityType: "batch", entityId: batch.id, ip: a.ip });
   return {
+    batchId: batch.id,
+    status: batch.status,
     trackingCode: batch.trackingCode,
     category: { name: category.name, code: category.code, colorHex: category.colorHex, handlingInstructions: category.handlingInstructions },
     originName: o.name,

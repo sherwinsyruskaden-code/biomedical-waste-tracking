@@ -4,6 +4,7 @@ import clsx from "clsx";
 import {
   Bell,
   Building2,
+  ClipboardCheck,
   ChevronDown,
   ClipboardList,
   FileBarChart,
@@ -66,13 +67,20 @@ export function AppShell() {
     queryFn: () => api.get<{ unread: number }>("/api/notifications?pageSize=1"),
     refetchInterval: 60_000,
   });
-  const openAlerts = useQuery({
-    queryKey: ["alerts", "count"],
-    queryFn: () => api.get<{ total: number }>("/api/alerts?pageSize=1"),
-    refetchInterval: 60_000,
-    enabled: !isTransporter,
-  });
 
+  const canReview = isAdmin && me.user.canReviewOrganizations;
+  const pendingOrgs = useQuery({
+    queryKey: ["platform", "pending-count"],
+    queryFn: () => api.get<{ counts: { pending: number } }>("/api/platform/organizations?status=pending"),
+    refetchInterval: 60_000,
+    enabled: canReview,
+  });
+  const awaitingReceipt = useQuery({
+    queryKey: ["batches", "awaiting-receipt-count"],
+    queryFn: () => api.get<{ total: number }>("/api/batches?status=delivered&pageSize=1"),
+    refetchInterval: 30_000,
+    enabled: work.atPlant && !isAdmin,
+  });
   const logout = useMutation({
     mutationFn: () => api.post("/api/auth/logout"),
     onSettled: () => {
@@ -94,14 +102,13 @@ export function AppShell() {
   const items: NavItem[] = [
     { to: "/dashboard", label: "Dashboard", icon: <LayoutDashboard />, show: true },
     { to: "/batches", label: "Waste batches", icon: <ClipboardList />, show: isAdmin || atHospital },
-    { to: "/receiving", label: atPlant && !isAdmin ? "Incoming & disposal" : "Receipt & disposal", icon: <PackageCheck />, show: isAdmin || atPlant },
+    { to: "/receiving", label: atPlant && !isAdmin ? "Arrivals & disposal" : "Receipt & disposal", icon: <PackageCheck />, show: isAdmin || atPlant, badge: awaitingReceipt.data?.total },
     { to: "/assignments", label: isTransporter ? "My collections" : isAdmin ? "Transport jobs" : atPlant && !atHospital ? "Incoming transfers" : "Collection requests", icon: <Truck />, show: true },
     { to: "/tracking", label: "Live map", icon: <Map />, show: isAdmin || isTransporter || atPlant },
-    { to: "/alerts", label: "Alerts & incidents", icon: <Inbox />, show: true, badge: openAlerts.data?.total },
     { to: "/reports", label: "Reports", icon: <FileBarChart />, show: !isTransporter },
-    { to: "/demo-labels", label: "Demo QR labels", icon: <QrCode />, show: !!me.features.demoOrg && (isTransporter || atPlant) },
     { to: "/team", label: "Team", icon: <Users />, show: isAdmin },
-    { to: "/facilities", label: isAdmin ? "Facilities & categories" : "My facility", icon: <Building2 />, show: isAdmin || isStaff || isTransporter },
+    { to: "/approvals", label: "Organization approvals", icon: <ClipboardCheck />, show: canReview, badge: pendingOrgs.data?.counts.pending },
+    { to: "/facilities", label: isAdmin ? "Facilities & categories" : "My facility", icon: <Building2 />, show: isAdmin },
     { to: "/settings", label: "Settings", icon: <Settings />, show: true },
   ];
   const roleName = isStaff ? (atPlant && !atHospital ? "Treatment-plant staff" : atHospital && !atPlant ? "Hospital staff" : roleLabel[role]) : roleLabel[role];
@@ -149,7 +156,6 @@ export function AppShell() {
         </Link>
         {orgPanel}
         <div className="flex-1 overflow-y-auto">{nav}</div>
-        <p className="px-2 text-[11.5px] leading-snug text-ink-3">Records support traceability. They are not a regulatory certificate.</p>
       </aside>
 
       {/* Mobile nav drawer */}
@@ -178,11 +184,13 @@ export function AppShell() {
             <Logo />
           </Link>
           <div className="flex-1" />
-          <Button variant="scan" onClick={() => navigate("/scan")} icon={<ScanLine className="size-[18px]" />}>
-            <span className="hidden sm:inline">Scan label</span>
-            <span className="sm:hidden">Scan</span>
-          </Button>
-          <Link to="/alerts?tab=notifications" className="relative rounded-[10px] p-2.5 text-ink-2 hover:bg-mist" aria-label={`Notifications${unread.data?.unread ? `, ${unread.data.unread} unread` : ""}`}>
+          {(isTransporter || (work.atPlant && !isAdmin)) && (
+            <Button variant="scan" onClick={() => navigate("/scan")} icon={<ScanLine className="size-[18px]" />}>
+              <span className="hidden sm:inline">{isTransporter ? "Scan label" : "Scan Incoming Batch"}</span>
+              <span className="sm:hidden">Scan</span>
+            </Button>
+          )}
+          <Link to="/notifications" className="relative rounded-[10px] p-2.5 text-ink-2 hover:bg-mist" aria-label={`Notifications${unread.data?.unread ? `, ${unread.data.unread} unread` : ""}`}>
             <Bell className="size-5" />
             {!!unread.data?.unread && (
               <span className="tabular absolute right-1 top-1 grid min-w-[18px] place-items-center rounded-full bg-danger px-1 text-[10.5px] font-bold text-white">{unread.data.unread > 99 ? "99+" : unread.data.unread}</span>

@@ -86,7 +86,7 @@ export function useLiveEvents(enabled: boolean) {
     const refresh = () => {
       window.clearTimeout(timer.current);
       timer.current = window.setTimeout(() => {
-        for (const k of ["batches", "batch", "dashboard", "assignments", "assignment", "alerts", "incidents", "tracking"]) qc.invalidateQueries({ queryKey: [k] });
+        for (const k of ["batches", "batch", "dashboard", "assignments", "assignment", "tracking"]) qc.invalidateQueries({ queryKey: [k] });
       }, 400);
     };
     es.addEventListener("invalidate", refresh);

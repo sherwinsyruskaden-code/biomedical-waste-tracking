@@ -72,7 +72,10 @@ route(router, base, { method: "put", path: "/organization/settings", summary: "U
     const [f] = await db.select().from(facilities).where(and(eq(facilities.id, ctx.body.defaultTreatmentFacilityId), eq(facilities.organizationId, a.orgId), eq(facilities.active, true)));
     if (!f?.canReceive) throw badRequest("Choose an active facility of yours that is authorised to receive waste.", { fields: { defaultTreatmentFacilityId: "Not a receiving facility" } });
   }
-  await db.update(organizations).set({ settings: ctx.body, updatedAt: new Date() }).where(eq(organizations.id, a.orgId));
+  // Keep the internal sample-data marker even if the client did not send it back.
+  const [cur] = await db.select({ settings: organizations.settings }).from(organizations).where(eq(organizations.id, a.orgId));
+  const marker = ((cur?.settings ?? {}) as { sampleDataVersion?: number | null }).sampleDataVersion ?? ctx.body.sampleDataVersion ?? null;
+  await db.update(organizations).set({ settings: { ...ctx.body, sampleDataVersion: marker }, updatedAt: new Date() }).where(eq(organizations.id, a.orgId));
   await audit({ organizationId: a.orgId, actorUserId: a.userId, action: "organization.settings_update", metadata: ctx.body, ip: a.ip });
   return ctx.body;
 });

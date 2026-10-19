@@ -20,9 +20,9 @@ function batchScope(a: Actor, alias = "b"): SQL {
   if (a.role === "facility_staff") {
     if (!a.facilityIds.length) return sql`false`;
     const ids = sql.join(a.facilityIds.map((id) => sql`${id}::uuid`), sql`, `);
-    return sql`(${sql.raw(alias)}.origin_facility_id in (${ids}) or ${sql.raw(alias)}.destination_facility_id in (${ids}))`;
+    return sql`(${sql.raw(alias)}.origin_facility_id in (${ids}) or (${sql.raw(alias)}.destination_facility_id in (${ids}) and ${sql.raw(alias)}.status in ('collected','in_transit','delivered','received','disposed','rejected')))`;
   }
-  return sql`exists (select 1 from assignment_batches ab join assignments a2 on a2.id = ab.assignment_id where ab.batch_id = ${sql.raw(alias)}.id and a2.transporter_user_id = ${a.userId})`;
+  return sql`exists (select 1 from assignment_batches ab join assignments a2 on a2.id = ab.assignment_id where ab.batch_id = ${sql.raw(alias)}.id and a2.transporter_user_id = ${a.userId} and a2.status not in ('declined','cancelled'))`;
 }
 
 // ------------------------------------------------------------------ dashboard
@@ -36,7 +36,7 @@ route(router, base, { method: "get", path: "/dashboard", summary: "Operational o
     select status, count(*)::int as n from waste_batches b where b.organization_id = ${org} and ${scope} group by status`);
   const byStatus = Object.fromEntries(batchStatusEnum.enumValues.map((s) => [s, statusCounts.find((r) => r.status === s)?.n ?? 0]));
 
-  const asgScope = a.role === "admin" ? sql`true` : a.role === "transporter" ? sql`a.transporter_user_id = ${a.userId}` : a.facilityIds.length ? sql`(a.origin_facility_id in (${sql.join(a.facilityIds.map((i) => sql`${i}::uuid`), sql`, `)}) or a.destination_facility_id in (${sql.join(a.facilityIds.map((i) => sql`${i}::uuid`), sql`, `)}))` : sql`false`;
+  const asgScope = a.role === "admin" ? sql`true` : a.role === "transporter" ? sql`a.transporter_user_id = ${a.userId}` : a.facilityIds.length ? sql`(a.origin_facility_id in (${sql.join(a.facilityIds.map((i) => sql`${i}::uuid`), sql`, `)}) or (a.status in ('accepted','in_progress','completed') and a.destination_facility_id in (${sql.join(a.facilityIds.map((i) => sql`${i}::uuid`), sql`, `)})))` : sql`false`;
   const [asg] = await rowsOf<{ active: number; in_progress: number; overdue: number; tracking: number }>(sql`
     select count(*) filter (where status in ('assigned','accepted','in_progress'))::int as active,
            count(*) filter (where status = 'in_progress')::int as in_progress,
@@ -74,18 +74,6 @@ route(router, base, { method: "get", path: "/dashboard", summary: "Operational o
     from custody_events e join waste_batches b on b.id = e.batch_id left join users u on u.id = e.actor_user_id left join facilities f on f.id = e.facility_id
     where e.organization_id = ${org} and ${scope} order by e.created_at desc, e.id desc limit 10`);
 
-  const openIncidents = await db
-    .select({ id: incidents.id, type: incidents.type, severity: incidents.severity, description: incidents.description, createdAt: incidents.createdAt, batchId: incidents.batchId })
-    .from(incidents)
-    .where(and(eq(incidents.organizationId, org), eq(incidents.status, "open"), a.role === "admin" ? undefined : a.role === "facility_staff" && a.facilityIds.length ? inArray(incidents.facilityId, a.facilityIds) : eq(incidents.reportedById, a.userId)))
-    .orderBy(sql`${incidents.createdAt} desc`)
-    .limit(5);
-
-  const alertRows = await rowsOf<{ type: string; severity: string; n: number }>(sql`
-    select type, severity, count(*)::int as n from alerts where organization_id = ${org} and status = 'open'
-    ${a.role === "admin" ? sql`` : a.role === "transporter" ? sql`and assignment_id in (select id from assignments where transporter_user_id = ${a.userId}) and type <> 'invalid_transition'` : a.facilityIds.length ? sql`and facility_id in (${sql.join(a.facilityIds.map((i) => sql`${i}::uuid`), sql`, `)}) and type <> 'invalid_transition'` : sql`and false`}
-    group by type, severity`);
-
   void vis;
   return {
     generatedAt: new Date(),
@@ -102,21 +90,17 @@ route(router, base, { method: "get", path: "/dashboard", summary: "Operational o
       assignmentsInProgress: asg?.in_progress ?? 0,
       overdueAssignments: asg?.overdue ?? 0,
       trackingNow: asg?.tracking ?? 0,
-      openIncidents: openIncidents.length,
-      openAlerts: alertRows.reduce((s, r) => s + r.n, 0),
     },
     byStatus,
     trend,
     byCategory,
     byFacility,
-    alertsByType: alertRows,
     recentEvents,
-    openIncidents,
   };
 });
 
 // ------------------------------------------------------------------ reports
-const reportTypes = ["batches", "volume_by_category", "facility_activity", "transport_performance", "custody_history", "incidents", "disposal"] as const;
+const reportTypes = ["batches", "volume_by_category", "facility_activity", "transport_performance", "custody_history", "disposal"] as const;
 type ReportType = (typeof reportTypes)[number];
 
 const reportQuery = z.object({
@@ -206,18 +190,6 @@ const reportMeta: Record<ReportType, { title: string; columns: Column[] }> = {
       { key: "scan_method", label: "Scan", width: 45 },
     ],
   },
-  incidents: {
-    title: "Incidents & delays",
-    columns: [
-      { key: "created_at", label: "Reported", width: 90 },
-      { key: "type", label: "Type", width: 90 },
-      { key: "severity", label: "Severity", width: 55 },
-      { key: "status", label: "Status", width: 55 },
-      { key: "tracking_code", label: "Batch", width: 95 },
-      { key: "description", label: "Description", width: 230 },
-      { key: "reported_by", label: "Reported by", width: 90 },
-    ],
-  },
   disposal: {
     title: "Disposal records",
     columns: [
@@ -280,7 +252,7 @@ async function runReport(q: ReportQuery, a: Actor): Promise<Record<string, unkno
     case "transport_performance": {
       const parts: SQL[] = [sql`a.organization_id = ${a.orgId}`];
       if (a.role === "transporter") parts.push(sql`a.transporter_user_id = ${a.userId}`);
-      if (a.role === "facility_staff") parts.push(a.facilityIds.length ? sql`(a.origin_facility_id in (${sql.join(a.facilityIds.map((i) => sql`${i}::uuid`), sql`, `)}) or a.destination_facility_id in (${sql.join(a.facilityIds.map((i) => sql`${i}::uuid`), sql`, `)}))` : sql`false`);
+      if (a.role === "facility_staff") parts.push(a.facilityIds.length ? sql`(a.origin_facility_id in (${sql.join(a.facilityIds.map((i) => sql`${i}::uuid`), sql`, `)}) or (a.status in ('accepted','in_progress','completed') and a.destination_facility_id in (${sql.join(a.facilityIds.map((i) => sql`${i}::uuid`), sql`, `)})))` : sql`false`);
       if (q.from) parts.push(sql`a.scheduled_pickup_at >= ${q.from}`);
       if (q.to) parts.push(sql`a.scheduled_pickup_at <= ${q.to}`);
       if (q.transporterUserId) parts.push(sql`a.transporter_user_id = ${q.transporterUserId}`);
@@ -301,27 +273,6 @@ async function runReport(q: ReportQuery, a: Actor): Promise<Record<string, unkno
         from custody_events e join waste_batches b on b.id = e.batch_id left join users u on u.id = e.actor_user_id
         left join facilities f on f.id = e.facility_id left join users tu on tu.id = e.to_custodian_user_id left join facilities tf on tf.id = e.to_custodian_facility_id
         where ${batchFilters({ ...q, status: undefined }, a, sql`e.created_at`)} order by e.created_at desc, e.id desc ${LIMIT}`);
-    case "incidents": {
-      const parts: SQL[] = [sql`i.organization_id = ${a.orgId}`];
-      if (a.role === "facility_staff") parts.push(a.facilityIds.length ? sql`(i.facility_id in (${sql.join(a.facilityIds.map((x) => sql`${x}::uuid`), sql`, `)}) or i.reported_by_id = ${a.userId})` : sql`i.reported_by_id = ${a.userId}`);
-      if (a.role === "transporter") parts.push(sql`(i.reported_by_id = ${a.userId} or i.assignment_id in (select id from assignments where transporter_user_id = ${a.userId}))`);
-      if (q.from) parts.push(sql`i.created_at >= ${q.from}`);
-      if (q.to) parts.push(sql`i.created_at <= ${q.to}`);
-      if (q.facilityId) parts.push(sql`i.facility_id = ${q.facilityId}`);
-      const rows = await rowsOf<Record<string, unknown>>(sql`
-        select i.created_at, i.type, i.severity, i.status, b.tracking_code, i.description, u.full_name as reported_by
-        from incidents i left join waste_batches b on b.id = i.batch_id left join users u on u.id = i.reported_by_id
-        where ${sql.join(parts, sql` and `)} order by i.created_at desc ${LIMIT}`);
-      // Delays are tracked as alerts; include them so the report covers "incidents and delays".
-      const delayParts: SQL[] = [sql`al.organization_id = ${a.orgId}`, sql`al.type in ('delayed_transport','overdue_collection','missing_handover','pending_receipt')`];
-      if (a.role !== "admin") delayParts.push(sql`false`);
-      if (q.from) delayParts.push(sql`al.created_at >= ${q.from}`);
-      if (q.to) delayParts.push(sql`al.created_at <= ${q.to}`);
-      const delays = await rowsOf<Record<string, unknown>>(sql`
-        select al.created_at, al.type, al.severity, al.status, b.tracking_code, al.title || ' — ' || al.message as description, 'system (alert)' as reported_by
-        from alerts al left join waste_batches b on b.id = al.batch_id where ${sql.join(delayParts, sql` and `)} order by al.created_at desc ${LIMIT}`);
-      return [...rows, ...delays].sort((x, y) => new Date(y.created_at as string).getTime() - new Date(x.created_at as string).getTime());
-    }
     case "disposal":
       return rowsOf(sql`
         select dr.disposed_at, b.tracking_code, c.code as category, f.name as facility, dr.method, dr.treated_quantity, dr.unit, u.full_name as performed_by, dr.document_ref

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PASSWORD, app, client, lastMailTo, signupOrg, uniq } from "./helpers.js";
+import { PASSWORD, app, client, lastMailTo, registrationFacility, signupOrg, uniq } from "./helpers.js";
 import request from "supertest";
 
 describe("registration", () => {
@@ -24,6 +24,7 @@ describe("registration", () => {
       password: PASSWORD,
       confirmPassword: PASSWORD,
       organization: { name: "Dup Org", type: "clinic" },
+      facility: registrationFacility(),
       acceptTerms: true,
     });
     expect(res.status).toBe(409);
@@ -32,14 +33,14 @@ describe("registration", () => {
 
   it("validates input with useful messages", async () => {
     const c = client();
-    const weak = await c.post("/api/auth/signup", { fullName: "A B", email: "not-an-email", password: "short", confirmPassword: "short", organization: { name: "X", type: "clinic" }, acceptTerms: true });
+    const weak = await c.post("/api/auth/signup", { fullName: "A B", email: "not-an-email", password: "abc", confirmPassword: "abc", organization: { name: "X", type: "clinic" }, facility: registrationFacility(), acceptTerms: true });
     expect(weak.status).toBe(400);
     expect(weak.body.error.details.fields).toHaveProperty("email");
     expect(weak.body.error.details.fields).toHaveProperty("password");
-    const mismatch = await c.post("/api/auth/signup", { fullName: "Ana B", email: `m-${uniq()}@x.test`, password: PASSWORD, confirmPassword: PASSWORD + "x", organization: { name: "Org", type: "clinic" }, acceptTerms: true });
+    const mismatch = await c.post("/api/auth/signup", { fullName: "Ana B", email: `m-${uniq()}@x.test`, password: PASSWORD, confirmPassword: PASSWORD + "x", organization: { name: "Org", type: "clinic" }, facility: registrationFacility(), acceptTerms: true });
     expect(mismatch.status).toBe(400);
     expect(mismatch.body.error.details.fields).toHaveProperty("confirmPassword");
-    const terms = await c.post("/api/auth/signup", { fullName: "Ana B", email: `t-${uniq()}@x.test`, password: PASSWORD, confirmPassword: PASSWORD, organization: { name: "Org", type: "clinic" }, acceptTerms: false });
+    const terms = await c.post("/api/auth/signup", { fullName: "Ana B", email: `t-${uniq()}@x.test`, password: PASSWORD, confirmPassword: PASSWORD, organization: { name: "Org", type: "clinic" }, facility: registrationFacility(), acceptTerms: false });
     expect(terms.status).toBe(400);
   });
 });

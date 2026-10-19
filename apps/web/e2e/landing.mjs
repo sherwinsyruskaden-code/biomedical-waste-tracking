@@ -48,7 +48,7 @@ async function landing(page) {
   };
 }
 const assertPublic = (s, label) => { assert.equal(s.createAccount, 2, `${label}: header + hero "Create an account" links missing`); assert.equal(s.acceptInvite, 1, `${label}: "Accept invitation" link missing`); assert.equal(s.signIn, 1, `${label}: "Sign in" link missing`); };
-const ADMIN = { name: /Organization administrator/ };
+const ADMIN = { name: /Main Admin/ };
 
 const A = await profile();
 const B = await profile(); // a completely separate browser profile (own cookie jar)
@@ -80,61 +80,129 @@ await check("landing still offers sign-up when /api/auth/me fails or is slow", a
   assertPublic({ createAccount: await x.page.getByRole("link", { name: "Create an account" }).count(), acceptInvite: await x.page.getByRole("link", { name: "Accept invitation" }).count(), signIn: await x.page.getByRole("link", { name: "Sign in" }).count() }, "me slow (while loading)");
 });
 
-console.log("Landing content, account creation and demo roles");
-await check("the redundant 'Just looking?' demo text is gone; role-specific demo buttons are shown", async () => {
+console.log("Landing content, account creation and role selection");
+await check("footer reads 'Biomedical Waste Tracking System' and 'Terms & Privacy'", async () => {
+  await landing(A.page);
+  const footer = await A.page.locator("footer").innerText();
+  assert.ok(footer.includes("Biomedical Waste Tracking System"), footer);
+  assert.ok(!footer.includes("academic project"), footer);
+  assert.equal(await A.page.getByRole("link", { name: "Terms & Privacy", exact: true }).count(), 1);
+  assert.equal(await A.page.getByRole("link", { name: "Terms & privacy", exact: true }).count(), 0);
+});
+await check("the redundant 'Just looking?' text is gone; the role selector shows only four choices", async () => {
   await landing(A.page);
   assert.equal(await A.page.getByText(/Just looking\?/).count(), 0);
   assert.equal(await A.page.getByText(/pick another demo role/).count(), 0);
   assert.equal(await A.page.getByText("I have an invitation").count(), 0);
   const roles = await A.page.getByTestId("demo-roles").locator("button").allInnerTexts();
-  for (const r of ["Hospital staff — Hospital A", "Hospital staff — Hospital B", "Transporter", "Treatment-plant staff", "Organization administrator", "Platform administrator"]) assert.ok(roles.some((t) => t.includes(r)), `missing demo role ${r}`);
+  assert.equal(roles.length, 4, `expected 4 primary choices, got: ${roles.join(" | ")}`);
+  for (const r of ["Hospital Staff", "Transporter", "Treatment Plant Staff", "Main Admin"]) assert.ok(roles.some((t) => t.includes(r)), `missing ${r}`);
+  assert.equal(await A.page.locator('[data-demo="staff"]').count(), 0, "Hospital A visible before choosing Hospital Staff");
+  assert.equal(await A.page.locator('[data-demo="staffB"]').count(), 0, "Hospital B visible before choosing Hospital Staff");
+  assert.equal(await A.page.getByRole("button", { name: /Platform/i }).count(), 0, "a platform role is still offered");
 });
-await check("'Create an account' explains both paths; staff are sent to the invitation flow", async () => {
+await check("Hospital Staff reveals Hospital A and Hospital B", async () => {
+  await A.page.locator('[data-demo="hospital"]').click();
+  await A.page.locator('[data-demo="staff"]').waitFor();
+  await A.page.locator('[data-demo="staffB"]').waitFor();
+  const roles = await A.page.getByTestId("demo-roles").locator("button").allInnerTexts();
+  assert.equal(roles.length, 6);
+  await A.page.locator('[data-demo="hospital"]').click();
+  await A.page.locator('[data-demo="staff"]').waitFor({ state: "detached" });
+});
+await check("the sign-in page shows the same four choices", async () => {
+  await A.page.goto("/login");
+  await A.page.getByTestId("demo-roles").waitFor();
+  assert.equal(await A.page.getByTestId("demo-roles").locator("button").count(), 4);
+});
+await check("'Create an account' explains both paths with the simplified invitation text", async () => {
   await A.page.goto("/");
   await A.page.getByRole("link", { name: "Create an account" }).last().click();
   await A.page.getByRole("heading", { name: "Create an account" }).waitFor();
-  await A.page.getByRole("button", { name: "Organization administrator" }).count(); // no role picker: roles are never self-assigned
-  assert.equal(await A.page.getByLabel("Role").count(), 0);
+  assert.equal(await A.page.getByLabel("Role").count(), 0); // roles are never self-assigned
   await A.page.getByRole("radio", { name: /Join my organization/ }).click();
-  await A.page.getByTestId("join-by-invitation").waitFor();
+  const box = A.page.getByTestId("join-by-invitation");
+  await box.waitFor();
+  const text = await box.innerText();
+  assert.match(text, /added by that organization's administrator, who chooses their role and facility\./);
+  for (const gone of ["invited to their hospital", "invited to their approved treatment plant", "invited by the organization that dispatches them", "Team → Invite", "nobody can give themselves extra access"]) assert.ok(!text.includes(gone), `still shows: ${gone}`);
   await A.page.getByRole("link", { name: /I have an invitation/ }).click();
   await A.page.getByRole("heading", { name: "Accept an invitation" }).waitFor();
   await A.page.getByLabel("Invitation link or code").fill("http://localhost:5173/invite/not-a-real-invitation-token-123");
   await A.page.getByRole("button", { name: "Continue" }).click();
   await A.page.getByRole("heading", { name: "Invitation unavailable" }).waitFor();
 });
-await check("Hospital A and Hospital B demo staff each see only their own hospital", async () => {
-  const seen = {};
+await check("sign-up accepts a 4-character password and rejects 3 characters in the form", async () => {
+  await A.page.goto("/signup");
+  await A.page.getByLabel("Full name").fill("Pia Pass");
+  await A.page.getByLabel("Work email").fill(`pass-${Date.now().toString(36)}@e2e.test`);
+  await A.page.getByLabel(/^Password/).fill("abc");
+  await A.page.getByText("Password must be at least 4 characters.").first().waitFor();
+  await A.page.getByLabel(/^Password/).fill("abcd");
+  assert.equal(await A.page.getByText("Password must be at least 4 characters.").count(), 0);
+});
+await check("Hospital A and Hospital B staff each see only their own hospital", async () => {
   for (const [key, label] of [["staff", "Hospital A"], ["staffB", "Hospital B"]]) {
     const x = await profile();
     await x.page.goto("/");
+    await x.page.locator('[data-demo="hospital"]').click();
     await x.page.locator(`[data-demo="${key}"]`).click();
     await x.page.waitForURL("**/dashboard", { timeout: 90000 });
     await x.page.getByTestId("workplace").filter({ hasText: label }).first().waitFor();
     await x.page.goto("/batches");
     await x.page.locator("tbody tr").first().waitFor();
     const rows = await x.page.locator("tbody tr").allInnerTexts();
-    seen[key] = rows;
-    assert.ok(rows.every((r) => r.includes(label)), `${key} sees another hospital: ${rows.find((r) => !r.includes(label))?.slice(0, 120)}`);
+    const preloaded = rows.filter((r) => r.includes("SMP-"));
+    assert.ok(preloaded.length <= 3, `too many preloaded batches for one hospital: ${preloaded.length}`);
+    assert.ok(rows.every((r) => r.includes(label)), `${key} sees another hospital`);
     const nav = await x.page.getByRole("navigation", { name: "Main" }).first().innerText();
-    assert.ok(nav.includes("Collection requests") && nav.includes("My facility"), "hospital nav");
-    assert.ok(!nav.includes("Team") && !nav.includes("Live map"), "hospital staff see admin-only or unneeded modules");
-    await x.page.goto("/facilities");
-    await x.page.getByTestId("own-facility").filter({ hasText: label }).waitFor();
-    assert.equal(await x.page.getByTestId("own-facility").count(), 1);
-    assert.equal(await x.page.getByText(label === "Hospital A" ? "Hospital B" : "Hospital A").count(), 0, "the other hospital is visible on My facility");
+    assert.ok(nav.includes("Collection requests") && !nav.includes("My facility"), "hospital nav");
+    assert.ok(!nav.includes("Team") && !nav.includes("Live map") && !nav.includes("Organization approvals"), "hospital staff see unneeded modules");
+    await x.page.goto("/approvals");
+    await x.page.waitForURL("**/dashboard"); // no review permission: bounced
   }
 });
-await check("the platform administrator demo opens the approval queue", async () => {
+await check("Main Admin has the Organization approvals section; it lists pending organizations", async () => {
   const x = await profile();
   await x.page.goto("/");
-  await x.page.locator('[data-demo="platform"]').click();
-  await x.page.waitForURL("**/platform", { timeout: 90000 });
-  await x.page.getByRole("heading", { name: "Organization registrations" }).waitFor();
-  await x.page.getByTestId("org-review").filter({ hasText: "DEMO applicant" }).first().waitFor();
+  await x.page.locator('[data-demo="admin"]').click();
+  await x.page.waitForURL("**/dashboard", { timeout: 90000 });
+  await x.page.getByRole("link", { name: /Organization approvals/ }).click();
+  await x.page.waitForURL("**/approvals");
+  await x.page.getByRole("heading", { name: "Organization approvals" }).waitFor();
+  await x.page.getByTestId("org-review").filter({ hasText: "sample applicant" }).first().waitFor();
+  await x.page.goto("/platform");
+  await x.page.waitForURL("**/approvals"); // the old address is redirected
+});
+await check("no user-facing text contains the word 'demo' on any role's main screens", async () => {
+  const pages = ["/dashboard", "/batches", "/assignments", "/facilities", "/alerts", "/reports", "/settings", "/scan", "/demo-labels", "/tracking", "/receiving", "/team", "/approvals", "/batches/new"];
+  const seen = [];
+  for (const [role, via] of [["staff", "hospital"], ["driver"], ["plant"], ["admin"]]) {
+    const x = await profile();
+    await x.page.goto("/");
+    if (via) await x.page.locator(`[data-demo="${via}"]`).click();
+    await x.page.locator(`[data-demo="${role}"]`).click();
+    await x.page.waitForURL("**/dashboard", { timeout: 90000 });
+    for (const path of pages) {
+      await x.page.goto(path);
+      await x.page.waitForLoadState("networkidle");
+      const text = await x.page.locator("body").innerText();
+      const hit = text.match(/.{0,40}\bdemo\b.{0,40}/i);
+      if (hit) seen.push(`${role} ${path}: …${hit[0]}…`);
+      if (/Records support traceability\. They are not a regulatory certificate\./.test(text)) seen.push(`${role} ${path}: regulatory disclaimer`);
+      if (/My facility/.test(text)) seen.push(`${role} ${path}: My facility`);
+    }
+  }
+  for (const path of ["/", "/login", "/signup", "/invite", "/terms"]) {
+    await A.page.goto(path);
+    await A.page.waitForLoadState("networkidle");
+    const hit = (await A.page.locator("body").innerText()).match(/.{0,40}\bdemo\b.{0,40}/i);
+    if (hit) seen.push(`public ${path}: …${hit[0]}…`);
+  }
+  assert.deepEqual(seen, []);
 });
 
-console.log("After a demo sign-in");
+console.log("After a quick sign-in");
 await check("demo login reaches the dashboard", async () => {
   await A.page.goto("/");
   await A.page.getByRole("button", ADMIN).click();
@@ -201,7 +269,7 @@ await check("a wrong password on the sign-in page is a normal form error, not a 
   const x = await profile();
   await x.page.goto("/login");
   await x.page.getByLabel("Work email").fill("nobody@example.test");
-  await x.page.getByLabel("Password").fill("wrong-password-123");
+  await x.page.getByLabel("Password", { exact: true }).fill("wrong-password-123");
   await x.page.getByRole("button", { name: "Sign in", exact: true }).click();
   // The login rate limiter may answer instead when this suite has been run many times in 15 minutes; both are plain form errors.
   await x.page.getByText(/Invalid email or password|Too many/).waitFor();

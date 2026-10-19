@@ -38,7 +38,7 @@ let failed = 0;
 async function check(name, fn) { try { await fn(); console.log(`  ✓ ${name}`); } catch (e) { failed++; console.log(`  ✗ ${name}\n      ${String(e.message ?? e).split("\n").slice(0, 6).join("\n      ")}`); } }
 
 await page.goto("/login");
-await page.getByRole("button", { name: /Organization administrator/ }).click();
+await page.getByRole("button", { name: /Main Admin/ }).click();
 await page.waitForURL("**/dashboard", { timeout: 90000 });
 console.log(`Browser timezone: ${await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone)}   Organization timezone: ${ORG_TZ}`);
 

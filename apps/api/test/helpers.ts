@@ -27,6 +27,21 @@ export type Client = ReturnType<typeof client>;
 
 export const PASSWORD = "Str0ng-Passw0rd!";
 
+/** A valid facility for organization registration (Hospital or Lab only). */
+export const registrationFacility = (over: Record<string, unknown> = {}) => ({
+  name: "Main Hospital",
+  kind: "hospital",
+  registrationId: `REG-${uniq().toUpperCase()}`,
+  address: "1 Hospital Road, Tambaram",
+  city: "Chennai",
+  state: "Tamil Nadu",
+  postalCode: "600045",
+  contactPhone: "+91 90000 11111",
+  latitude: 12.9249,
+  longitude: 80.1,
+  ...over,
+});
+
 let platform: Client | null = null;
 /** A platform administrator. The flag can only be set server-side, so the test writes it directly (like the CLI). */
 export async function platformAdmin() {
@@ -55,7 +70,7 @@ export async function signupOrg(name = "Test Hospital", { approve = true } = {})
     password: PASSWORD,
     confirmPassword: PASSWORD,
     organization: { name: `${name} ${uniq()}`, type: "hospital" },
-    facility: { name: "Main Hospital", type: "generator", address: "1 Hospital Road, Chennai", city: "Chennai", latitude: 12.9249, longitude: 80.1 },
+    facility: registrationFacility(),
     acceptTerms: true,
   });
   if (res.status !== 201) throw new Error(`signup failed ${res.status} ${JSON.stringify(res.body)}`);

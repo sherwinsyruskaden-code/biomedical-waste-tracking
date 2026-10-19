@@ -15,7 +15,7 @@ const statusPresets: [string, string][] = [
   ["generated", "— Generated"],
   ["segregated", "— Segregated"],
   ["collected,in_transit", "On the road"],
-  ["delivered", "Awaiting receipt"],
+  ["delivered", "Arrived — awaiting receipt"],
   ["received", "Awaiting disposal"],
   ["disposed", "Disposed"],
   ["rejected", "Rejected"],
@@ -107,7 +107,7 @@ export default function Batches() {
             title={filtered ? "No batches match these filters" : "No waste batches yet"}
             action={filtered ? <button className="text-sm font-semibold text-emerald-700" onClick={() => setParams({})}>Clear filters</button> : !isTransporter && <Link to="/batches/new" className="text-sm font-semibold text-emerald-700">Register the first batch</Link>}
           >
-            {filtered ? "Try widening the date range or status." : "Register waste at a facility to create its QR labels and start the custody record."}
+            {filtered ? "Try widening the date range or status." : "Register waste at your facility to start the custody record."}
           </EmptyState>
         ) : (
           <>

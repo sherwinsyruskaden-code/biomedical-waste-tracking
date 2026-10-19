@@ -12,8 +12,8 @@ import { AppError, badRequest, conflict, notFound, unauthorized } from "../lib/e
 import { route, zId, zOptionalText } from "../lib/http.js";
 import { sendMail } from "../lib/mailer.js";
 import { clearSessionCookie, createSession } from "../lib/session.js";
-import { createOrganization, facilityInput, orgInput } from "../services/orgs.js";
-import { DEMO_ORG_NAME, demoIsComplete, demoPeople, seedDemo } from "../services/demo.js";
+import { createOrganization, orgInput, registrationFacilityInput, registrationToFacility } from "../services/orgs.js";
+import { DEMO_ORG_NAME, demoPeople, ensureSampleData } from "../services/demo.js";
 
 export const router = Router();
 const base = "/api/auth";
@@ -25,11 +25,12 @@ export const zEmail = z
   .email("Enter a valid email address")
   .max(254);
 
+/** One rule for every place a password is set (sign-up, invitation, change, reset); the web app mirrors it. */
+export const MIN_PASSWORD_LENGTH = 4;
 export const zPassword = z
   .string()
-  .min(10, "Password must be at least 10 characters")
-  .max(128, "Password is too long")
-  .refine((p) => /[A-Za-z]/.test(p) && /\d/.test(p), "Password must contain letters and numbers");
+  .min(MIN_PASSWORD_LENGTH, `Password must be at least ${MIN_PASSWORD_LENGTH} characters`)
+  .max(128, "Password is too long");
 
 // Argon2id with library defaults (memory-hard). A dummy hash keeps timing similar for unknown emails.
 export const hashPassword = (p: string) => hash(p);
@@ -60,7 +61,7 @@ const resetLimiter = rateLimit({
 router.use("/login", authLimiter);
 router.use(
   "/demo-login",
-  rateLimit({ windowMs: 15 * 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false, handler: (_req, res) => res.status(429).json({ error: { code: "rate_limited", message: "Too many demo sign-ins. Please wait a few minutes." } }) }),
+  rateLimit({ windowMs: 15 * 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false, handler: (_req, res) => res.status(429).json({ error: { code: "rate_limited", message: "Too many quick sign-ins. Please wait a few minutes." } }) }),
 );
 router.use("/forgot-password", resetLimiter);
 router.use("/reset-password", resetLimiter);
@@ -72,7 +73,7 @@ const signupBody = z
     password: zPassword,
     confirmPassword: z.string(),
     organization: orgInput,
-    facility: facilityInput.nullable().optional(),
+    facility: registrationFacilityInput,
     acceptTerms: z.literal(true, { message: "You must accept the terms and privacy notice" }),
   })
   .refine((b) => b.password === b.confirmPassword, { message: "Passwords do not match", path: ["confirmPassword"] });
@@ -85,12 +86,12 @@ route(router, base, { method: "post", path: "/signup", summary: "Register a user
     const [user] = await tx.insert(users).values({ email: body.email, fullName: body.fullName, passwordHash }).returning({ id: users.id });
     const { org, facility } = await createOrganization(tx, {
       org: body.organization,
-      facility: body.facility ?? null,
+      facility: registrationToFacility(body.facility),
       adminUserId: user.id,
       contactEmail: body.email,
     });
     await audit({ organizationId: org.id, actorUserId: user.id, action: "auth.signup", entityType: "organization", entityId: org.id, ip: req.ip }, tx);
-    if (facility) await audit({ organizationId: org.id, actorUserId: user.id, action: "facility.create", entityType: "facility", entityId: facility.id, metadata: { name: facility.name } }, tx);
+    if (facility) await audit({ organizationId: org.id, actorUserId: user.id, action: "facility.create", entityType: "facility", entityId: facility.id, metadata: { name: facility.name, kind: facility.kind, registrationId: facility.registrationId } }, tx);
     await createSession(res, req, user.id, org.id, tx);
     return { userId: user.id, organizationId: org.id, facilityId: facility?.id ?? null };
   }).catch((err) => {
@@ -133,7 +134,7 @@ route(router, base, { method: "post", path: "/logout", summary: "Sign out and in
 route(router, base, { method: "get", path: "/me", summary: "Current user, memberships and active organization", tag: "Auth", access: "public" }, async ({ auth }) => {
   if (!auth) throw unauthorized();
   const [user] = await db
-    .select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, isPlatformAdmin: users.isPlatformAdmin, createdAt: users.createdAt })
+    .select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, canReviewOrganizations: users.isPlatformAdmin, createdAt: users.createdAt })
     .from(users)
     .where(eq(users.id, auth.user.id));
   const mems = await db
@@ -172,9 +173,9 @@ route(router, base, { method: "post", path: "/switch-organization", summary: "Ch
   return { ok: true };
 });
 
-route(router, base, { method: "post", path: "/create-organization", summary: "Create an additional organization (caller becomes admin)", tag: "Auth", access: "user", body: z.object({ organization: orgInput, facility: facilityInput.nullable().optional() }) }, async ({ auth, body, req, res }) => {
+route(router, base, { method: "post", path: "/create-organization", summary: "Create an additional organization (caller becomes admin)", tag: "Auth", access: "user", body: z.object({ organization: orgInput, facility: registrationFacilityInput }) }, async ({ auth, body, req, res }) => {
   const result = await db.transaction(async (tx) => {
-    const { org, facility } = await createOrganization(tx, { org: body.organization, facility: body.facility ?? null, adminUserId: auth.user.id, contactEmail: auth.user.email });
+    const { org, facility } = await createOrganization(tx, { org: body.organization, facility: registrationToFacility(body.facility), adminUserId: auth.user.id, contactEmail: auth.user.email });
     await tx.update(sessions).set({ activeOrganizationId: org.id }).where(eq(sessions.id, auth.sessionId));
     await audit({ organizationId: org.id, actorUserId: auth.user.id, action: "organization.create", entityType: "organization", entityId: org.id, ip: req.ip }, tx);
     return { organizationId: org.id, facilityId: facility?.id ?? null };
@@ -233,24 +234,21 @@ route(router, base, { method: "post", path: "/reset-password", summary: "Set a n
 
 // ------------------------------------------------------------------ one-click demo sign-in (DEMO_MODE only)
 const demoAccounts = [
-  { key: "staff", label: "Hospital staff — Hospital A", facility: "Sunrise General Hospital", description: "Registers waste and requests collection. Sees only Hospital A's batches." },
-  { key: "staffB", label: "Hospital staff — Hospital B", facility: "Sunrise Women & Children Hospital", description: "Same role at a different hospital. Cannot see Hospital A's batches." },
-  { key: "driver", label: "Transporter", facility: "Vehicle TN 22 DEMO 101", description: "Accepts collection requests, simulates QR scans, completes delivery." },
-  { key: "plant", label: "Treatment-plant staff", facility: "GreenCycle CBWTF", description: "Receives incoming waste and records treatment / disposal." },
-  { key: "admin", label: "Organization administrator", facility: "Sunrise Health Network", description: "Manages facilities, team and settings across the organization." },
-  { key: "platform", label: "Platform administrator", facility: "Platform review", description: "Approves or rejects pending organization registrations." },
+  { key: "staff", label: "Hospital A", group: "hospital", facility: "Sunrise General Hospital", description: "Registers waste and requests collection. Sees only Hospital A's batches." },
+  { key: "staffB", label: "Hospital B", group: "hospital", facility: "Sunrise Women & Children Hospital", description: "Same role at another hospital. Cannot see Hospital A's batches." },
+  { key: "driver", label: "Transporter", group: "transporter", facility: "Vehicle TN 22 BW 101", description: "Accepts collection requests, scans at pickup and arrival." },
+  { key: "plant", label: "Treatment Plant Staff", group: "plant", facility: "GreenCycle Treatment Plant", description: "Confirms receipt of arrivals and records treatment." },
+  { key: "admin", label: "Main Admin", group: "admin", facility: "Sunrise Health Network", description: "Manages facilities, team and settings, and reviews organization approvals." },
 ] as const;
 type DemoKey = (typeof demoAccounts)[number]["key"];
 
 let seeding: Promise<unknown> | null = null;
 /**
- * Creates the synthetic demo data on first use (concurrent requests share one run). If the demo is
- * missing an account (e.g. it was created by an older version), it is recreated — demo data only.
+ * Creates the synthetic sample data on first use (concurrent requests share one run). Existing sample data is
+ * only renamed / topped up in place — nothing is ever deleted here.
  */
 async function ensureDemoOrg() {
-  const [org] = await db.select({ id: organizations.id }).from(organizations).where(eq(organizations.name, DEMO_ORG_NAME));
-  if (org && (await demoIsComplete())) return org.id;
-  seeding ??= seedDemo({ reset: true, log: () => undefined }).finally(() => (seeding = null));
+  seeding ??= ensureSampleData().finally(() => (seeding = null));
   await seeding;
   const [created] = await db.select({ id: organizations.id }).from(organizations).where(eq(organizations.name, DEMO_ORG_NAME));
   return created.id;
@@ -264,7 +262,7 @@ route(router, base, { method: "get", path: "/demo", summary: "Whether one-click 
 route(router, base, {
   method: "post",
   path: "/demo-login",
-  summary: "DEMO MODE ONLY: sign in to the synthetic demo organization as one of its demo users",
+  summary: "Sample-data mode only: sign in as one of the sample accounts of the synthetic organization",
   tag: "Auth",
   access: "public",
   body: z.object({ account: z.enum(demoAccounts.map((a) => a.key) as [DemoKey, ...DemoKey[]]) }),
@@ -272,21 +270,12 @@ route(router, base, {
   if (!env.DEMO_MODE) throw notFound("Endpoint");
   const orgId = await ensureDemoOrg();
   const email = demoPeople.find((p) => p.key === body.account)!.email;
-  if (body.account === "platform") {
-    // The platform reviewer belongs to no organization; the flag was set by the demo seeder.
-    const [u] = await db.select({ id: users.id }).from(users).where(and(eq(users.email, email), eq(users.isPlatformAdmin, true)));
-    if (!u) throw new AppError(409, "demo_unavailable", "The demo platform administrator is missing. Recreate the demo with `npm run db:seed:reset`.");
-    await createSession(res, req, u.id, null, db, { demo: true });
-    await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, u.id));
-    await audit({ actorUserId: u.id, action: "auth.demo_login", ip: req.ip });
-    return { ok: true, home: "/platform" };
-  }
   const [row] = await db
     .select({ userId: users.id })
     .from(users)
     .innerJoin(memberships, and(eq(memberships.userId, users.id), eq(memberships.organizationId, orgId), eq(memberships.status, "active")))
     .where(eq(users.email, email));
-  if (!row) throw new AppError(409, "demo_unavailable", "The demo account is missing or disabled. Recreate the demo with `npm run db:seed:reset`.");
+  if (!row) throw new AppError(409, "demo_unavailable", "This sample account is missing or disabled. Recreate the sample data with `npm run db:seed:reset` (this wipes the sample organization).");
   await createSession(res, req, row.userId, orgId, db, { demo: true }); // replaces any existing session; short-lived
   await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, row.userId));
   await audit({ organizationId: orgId, actorUserId: row.userId, action: "auth.demo_login", ip: req.ip });

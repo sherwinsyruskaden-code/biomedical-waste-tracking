@@ -46,6 +46,8 @@ export const facilityTypeEnum = pgEnum("facility_type", [
   "storage", // intermediate storage area
   "treatment", // common biomedical waste treatment facility (CBWTF) / disposal site
 ]);
+/** What a facility registered at sign-up is: shown to reviewers. (Internally generators are still `facility_type = generator`.) */
+export const facilityKindEnum = pgEnum("facility_kind", ["hospital", "lab"]);
 export const quantityUnitEnum = pgEnum("quantity_unit", ["kg", "litre", "bag", "container"]);
 export const batchStatusEnum = pgEnum("batch_status", [
   "generated",
@@ -64,6 +66,8 @@ export const assignmentStatusEnum = pgEnum("assignment_status", [
   "in_progress",
   "completed",
   "cancelled",
+  /** The assigned transporter refused the collection; the batch goes back to the hospital's queue. */
+  "declined",
 ]);
 export const custodyEventTypeEnum = pgEnum("custody_event_type", [
   "created",
@@ -80,6 +84,7 @@ export const custodyEventTypeEnum = pgEnum("custody_event_type", [
   "disposed",
   "cancelled",
   "incident",
+  "declined",
 ]);
 export const scanMethodEnum = pgEnum("scan_method", ["qr", "rfid", "nfc", "manual"]);
 export const identifierMethodEnum = pgEnum("identifier_method", ["qr", "rfid", "nfc"]);
@@ -214,6 +219,12 @@ export const facilities = pgTable(
     contactName: text("contact_name"),
     contactPhone: text("contact_phone"),
     authorizationRef: text("authorization_ref"),
+    /** Hospital or lab, as declared at registration (null for facilities added before this existed or by an admin as a plant). */
+    kind: facilityKindEnum("kind"),
+    /** The registration ID the applicant submitted for this facility. Recorded as entered; it is not verified by this system. */
+    registrationId: text("registration_id"),
+    state: text("state"),
+    postalCode: text("postal_code"),
     latitude: doublePrecision("latitude"),
     longitude: doublePrecision("longitude"),
     active: boolean("active").notNull().default(true),
@@ -222,6 +233,7 @@ export const facilities = pgTable(
   },
   (t) => [
     uniqueIndex("facilities_org_name_uq").on(t.organizationId, t.name),
+    index("facilities_registration_id_idx").on(t.registrationId),
     index("facilities_org_idx").on(t.organizationId),
   ],
 );
@@ -429,6 +441,8 @@ export const assignments = pgTable(
     startedAt: ts("started_at"),
     completedAt: ts("completed_at"),
     cancelledAt: ts("cancelled_at"),
+    declinedAt: ts("declined_at"),
+    /** Reason for a cancellation or a decline. */
     cancelReason: text("cancel_reason"),
     createdAt: createdAt(),
     updatedAt: ts("updated_at").notNull().defaultNow(),
@@ -437,6 +451,8 @@ export const assignments = pgTable(
     uniqueIndex("assignments_reference_uq").on(t.reference),
     index("assignments_org_status_idx").on(t.organizationId, t.status),
     index("assignments_transporter_status_idx").on(t.transporterUserId, t.status),
+    // One active order per transporter, enforced by the database (created by migration 0003 when existing data allows it).
+    uniqueIndex("assignments_one_active_per_transporter_uq").on(t.transporterUserId).where(sql`${t.status} in ('assigned','accepted','in_progress')`),
   ],
 );
 

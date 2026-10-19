@@ -1,8 +1,8 @@
 /**
  * Platform administration: reviewing organization registrations.
  *
- * Platform administrators are a separate kind of account (users.is_platform_admin). They are
- * created only from the server CLI (`npm run platform-admin -- <email>`) or the demo seeder —
+ * Reviewing is a separate permission (users.is_platform_admin) rather than an organization role. It is
+ * granted only from the server CLI (`npm run platform-admin -- <email>`) or the demo seeder —
  * there is no API that grants the flag, so nobody can sign up as one.
  */
 import { and, eq } from "drizzle-orm";
@@ -18,7 +18,7 @@ export type ReviewDecision = "approve" | "reject";
 export async function reviewOrganization(reviewerUserId: string, orgId: string, decision: ReviewDecision, note: string | null, ip?: string) {
   const result = await db.transaction(async (tx) => {
     const [reviewer] = await tx.select({ isPlatformAdmin: users.isPlatformAdmin }).from(users).where(eq(users.id, reviewerUserId));
-    if (!reviewer?.isPlatformAdmin) throw forbidden("Only platform administrators can review organizations.");
+    if (!reviewer?.isPlatformAdmin) throw forbidden("Only accounts with the organization-review permission can review organizations.");
     const [org] = await tx.select().from(organizations).where(eq(organizations.id, orgId)).for("update");
     if (!org) throw notFound("Organization");
     // Nobody reviews an organization they belong to or applied for.

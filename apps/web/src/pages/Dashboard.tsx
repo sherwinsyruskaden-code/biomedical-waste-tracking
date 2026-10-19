@@ -1,14 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AlertTriangle, CheckCircle2, Circle, MapPinned, Plus, Radio, Truck } from "lucide-react";
+import { useState } from "react";
+import { CheckCircle2, Circle, MapPinned, Plus, Radio, ScanLine, Truck } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
 import { Bar, BarChart, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, Cell } from "recharts";
-import { Badge, CategoryChip, EmptyState, ErrorState, LoadingBlock, PageHeader, Panel, Skeleton } from "../components/ui";
+import { ActionDialog } from "../components/ActionDialog";
+import { Badge, Button, CategoryChip, EmptyState, ErrorState, LoadingBlock, PageHeader, Panel, Skeleton } from "../components/ui";
 import { api } from "../lib/api";
-import { assignmentMeta, eventLabel, fmtDateTime, humanize, timeAgo } from "../lib/format";
+import { assignmentMeta, eventLabel, fmtDateTime, fmtQty, humanize, timeAgo } from "../lib/format";
 import { CountUp } from "../components/CountUp";
 import { useActor, useWorkplace } from "../lib/session";
-import type { AssignmentStatus, Facility, Member, Paged } from "../lib/types";
+import type { AssignmentStatus, BatchListItem, Facility, Paged } from "../lib/types";
 
 interface DashboardData {
   generatedAt: string;
@@ -25,28 +27,21 @@ interface DashboardData {
     assignmentsInProgress: number;
     overdueAssignments: number;
     trackingNow: number;
-    openIncidents: number;
-    openAlerts: number;
   };
   trend: { day: string; generated: number; generated_kg: number; disposed: number }[];
   byCategory: { code: string; name: string; color_hex: string; batches: number; kg: number }[];
   byFacility: { name: string; generated: number; awaiting: number; kg: number }[];
-  alertsByType: { type: string; severity: string; n: number }[];
   recentEvents: { id: number; event_type: string; created_at: string; batch_id: string; tracking_code: string; actor_name: string | null; facility_name: string | null }[];
-  openIncidents: { id: string; type: string; severity: string; description: string; createdAt: string; batchId: string | null }[];
 }
 
 function SetupChecklist() {
   const [params] = useSearchParams();
   const facilities = useQuery({ queryKey: ["facilities"], queryFn: () => api.get<Facility[]>("/api/facilities") });
-  const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<Member[]>("/api/members") });
   const batches = useQuery({ queryKey: ["batches", "any"], queryFn: () => api.get<Paged<unknown>>("/api/batches?pageSize=1") });
-  if (!facilities.data || !members.data || !batches.data) return null;
+  if (!facilities.data || !batches.data) return null;
   const steps = [
     { done: facilities.data.some((f) => f.type !== "treatment"), label: "Add a facility that generates waste", to: "/facilities" },
     { done: facilities.data.some((f) => f.canReceive), label: "Add a treatment facility that can receive waste", to: "/facilities" },
-    { done: members.data.some((m) => m.role === "facility_staff"), label: "Invite facility staff", to: "/team" },
-    { done: members.data.some((m) => m.role === "transporter"), label: "Invite a transporter", to: "/team" },
     { done: batches.data.total > 0, label: "Register your first waste batch", to: "/batches/new" },
   ];
   const remaining = steps.filter((s) => !s.done).length;
@@ -75,17 +70,18 @@ function SetupChecklist() {
 }
 
 /** The signature element: the custody pipeline with live counts at each stage. */
-function Pipeline({ k }: { k: DashboardData["kpis"] }) {
-  const stages = [
-    { label: "Awaiting collection", value: k.awaitingCollection, to: "/batches?status=generated,segregated", hint: "generated or segregated" },
-    { label: "On the road", value: k.inTransit, to: "/batches?status=collected,in_transit", hint: "collected or in transit", live: true },
-    { label: "Awaiting receipt", value: k.awaitingReceipt, to: "/batches?status=delivered", hint: "handed over at the plant" },
-    { label: "Awaiting disposal", value: k.awaitingDisposal, to: "/batches?status=received", hint: "received, not yet treated" },
-    { label: "Disposed", value: k.disposedLast30Days, to: "/batches?status=disposed", hint: "last 30 days", done: true },
+function Pipeline({ k, plant }: { k: DashboardData["kpis"]; plant?: boolean }) {
+    const all = [
+    { label: "Awaiting collection", value: k.awaitingCollection, to: "/batches?status=generated,segregated", hint: "generated or segregated", hospital: true },
+    { label: "In transit", value: k.inTransit, to: plant ? "/receiving?tab=in_transit" : "/batches?status=collected,in_transit", hint: "collected or on the road", live: true },
+    { label: "Arrived — awaiting receipt", value: k.awaitingReceipt, to: plant ? "/receiving?tab=delivered" : "/batches?status=delivered", hint: "at the plant" },
+    { label: "Received", value: k.awaitingDisposal, to: plant ? "/receiving?tab=received" : "/batches?status=received", hint: "not yet treated" },
+    { label: "Disposed", value: k.disposedLast30Days, to: plant ? "/batches?status=disposed" : "/batches?status=disposed", hint: "last 30 days", done: true },
   ];
+  const stages = plant ? all.filter((s) => !s.hospital) : all;
   return (
     <section aria-label="Waste pipeline" className="rounded-[20px] border border-line bg-paper p-2">
-      <ol className="grid grid-cols-2 gap-2 md:grid-cols-5 md:gap-0">
+      <ol className="grid grid-cols-2 gap-2 md:[grid-template-columns:repeat(var(--n),minmax(0,1fr))] md:gap-0" style={{ "--n": stages.length } as React.CSSProperties}>
         {stages.map((s, i) => (
           <li key={s.label} className="relative">
             <Link
@@ -118,6 +114,48 @@ function Pipeline({ k }: { k: DashboardData["kpis"] }) {
           </li>
         ))}
       </ol>
+    </section>
+  );
+}
+
+/** Treatment-plant staff: what has arrived and is waiting for their confirmation. */
+function PlantArrivals() {
+  const [open, setOpen] = useState<BatchListItem | null>(null);
+  const q = useQuery({ queryKey: ["batches", "arrivals"], queryFn: () => api.get<Paged<BatchListItem>>("/api/batches?status=delivered&pageSize=20&sort=oldest"), refetchInterval: 30_000 });
+  const items = q.data?.items ?? [];
+  const enRoute = useQuery({ queryKey: ["batches", "en-route"], queryFn: () => api.get<Paged<BatchListItem>>("/api/batches?status=collected,in_transit&pageSize=10&sort=oldest"), refetchInterval: 30_000 });
+  return (
+    <section aria-label="Arrivals awaiting receipt" className={clsx("mb-5 rounded-[18px] border-2 p-5", items.length ? "border-signal bg-signal-soft/40" : "border-line bg-paper")} data-testid="plant-arrivals">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="flex items-center gap-2 text-[18px] font-bold"><Truck className="size-5 text-signal" /> Arrived — awaiting receipt {items.length > 0 && <Badge tone="warn">{q.data!.total}</Badge>}</h2>
+        <div className="flex items-center gap-3">
+          <Link to="/scan" className="inline-flex h-9 items-center gap-1.5 rounded-[10px] bg-lime px-3 text-sm font-semibold text-ink hover:bg-[#b8e81f]"><ScanLine className="size-4" /> Scan Incoming Batch</Link>
+          <Link to="/receiving" className="text-sm font-semibold text-emerald-700 hover:underline">All arrivals</Link>
+        </div>
+      </div>
+      {q.isLoading ? <LoadingBlock rows={2} /> : items.length === 0 ? (
+        <p className="mt-2 text-sm text-ink-2">Nothing has arrived at your plant right now.</p>
+      ) : (
+        <ul className="mt-3 divide-y divide-line rounded-[12px] bg-paper">
+          {items.map((b) => (
+            <li key={b.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center">
+              <div className="min-w-0 flex-1 text-sm">
+                <Link to={`/batches/${b.id}`} className="font-mono font-semibold hover:text-emerald-700">{b.trackingCode}</Link>
+                <span className="ml-2 text-ink-3">arrived {fmtDateTime(b.statusChangedAt)}</span>
+                <p className="text-ink-2">From {b.originName} · Transporter {b.transporterName ?? "—"} · <span className="tabular font-semibold text-ink">{fmtQty(b.quantity, b.unit)}</span> · <CategoryChip code={b.category.code} color={b.category.colorHex} compact /></p>
+              </div>
+              <Button onClick={() => setOpen(b)}>Confirm Receipt</Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {(enRoute.data?.items.length ?? 0) > 0 && (
+        <p className="mt-3 text-sm text-ink-2" data-testid="en-route">
+          <strong>In transit ({enRoute.data!.total}):</strong>{" "}
+          {enRoute.data!.items.map((b) => `${b.trackingCode} from ${b.originName}${b.transporterName ? ` with ${b.transporterName}` : ""}`).join(" · ")}
+        </p>
+      )}
+      {open && <ActionDialog open action="receive" target={{ id: open.id, trackingCode: open.trackingCode, quantity: open.quantity, unit: open.unit }} onOpenChange={(o) => !o && setOpen(null)} onDone={() => q.refetch()} />}
     </section>
   );
 }
@@ -173,13 +211,14 @@ export default function Dashboard() {
         actions={
           <>
             {(isAdmin || atPlant) && <Link to="/tracking" className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-line-2 bg-paper px-4 text-sm font-semibold hover:border-emerald-600"><MapPinned className="size-4" /> Live map</Link>}
-            {atPlant && !isAdmin && <Link to="/receiving" className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700">Incoming waste</Link>}
+            {atPlant && !isAdmin && <Link to="/scan" className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-lime px-4 text-sm font-semibold text-ink hover:bg-[#b8e81f]"><ScanLine className="size-4" /> Scan Incoming Batch</Link>}
             {(isAdmin || atHospital) && <Link to="/batches/new" className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700">
               <Plus className="size-4" /> Register batch
             </Link>}
           </>
         }
       />
+      {atPlant && !isAdmin && <PlantArrivals />}
       {isAdmin && <SetupChecklist />}
       {q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />
@@ -190,7 +229,7 @@ export default function Dashboard() {
         </div>
       ) : (
         <div className="flex flex-col gap-5">
-          <Pipeline k={d.kpis} />
+          <Pipeline k={d.kpis} plant={atPlant && !isAdmin} />
 
           <div className="grid gap-5 lg:grid-cols-[1.5fr_1fr]">
             <Panel title="Last 14 days" actions={<span className="text-[12.5px] text-ink-3">kg generated (bars) · batches disposed (line)</span>}>
@@ -209,44 +248,14 @@ export default function Dashboard() {
               </div>
             </Panel>
 
-            <Panel title="Needs attention" actions={<Link to="/alerts" className="text-sm font-semibold text-emerald-700 hover:underline">All alerts</Link>}>
-              {d.kpis.openAlerts === 0 && d.kpis.openIncidents === 0 && d.kpis.rejected === 0 ? (
-                <EmptyState icon={<CheckCircle2 />} title="Nothing needs attention">No open alerts, incidents or rejected loads.</EmptyState>
-              ) : (
-                <ul className="flex flex-col divide-y divide-line">
-                  {d.kpis.rejected > 0 && (
-                    <li className="flex items-center justify-between py-2.5">
-                      <Link to="/batches?status=rejected" className="font-medium hover:underline">Rejected deliveries to reroute</Link>
-                      <Badge tone="danger">{d.kpis.rejected}</Badge>
-                    </li>
-                  )}
-                  {d.alertsByType
-                    .reduce<{ type: string; n: number; sev: string }[]>((acc, r) => {
-                      const ex = acc.find((x) => x.type === r.type);
-                      if (ex) ex.n += r.n;
-                      else acc.push({ type: r.type, n: r.n, sev: r.severity });
-                      return acc;
-                    }, [])
-                    .map((r) => (
-                      <li key={r.type} className="flex items-center justify-between py-2.5">
-                        <Link to="/alerts" className="flex items-center gap-2 font-medium hover:underline">
-                          <AlertTriangle className={clsx("size-4", r.sev === "high" || r.sev === "critical" ? "text-danger" : "text-warn")} />
-                          {humanize(r.type)}
-                        </Link>
-                        <Badge tone={r.sev === "high" || r.sev === "critical" ? "danger" : "warn"}>{r.n}</Badge>
-                      </li>
-                    ))}
-                  {d.openIncidents.map((i) => (
-                    <li key={i.id} className="py-2.5">
-                      <Link to={i.batchId ? `/batches/${i.batchId}` : "/alerts?tab=incidents"} className="block hover:underline">
-                        <span className="font-medium">{humanize(i.type)}</span> <span className="text-ink-3">· {timeAgo(i.createdAt)}</span>
-                        <span className="block truncate text-sm text-ink-2">{i.description}</span>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+            <Panel title="Transport">
+              {d.kpis.rejected > 0 && (
+                <p className="mb-3 flex items-center justify-between rounded-[12px] bg-danger-soft/50 px-3 py-2.5 text-sm">
+                  <Link to="/batches?status=rejected" className="font-medium hover:underline">Rejected deliveries to reroute</Link>
+                  <Badge tone="danger">{d.kpis.rejected}</Badge>
+                </p>
               )}
-              <div className="mt-4 grid grid-cols-3 gap-2 rounded-[12px] bg-mist p-3 text-center">
+              <div className="grid grid-cols-3 gap-2 rounded-[12px] bg-mist p-3 text-center">
                 <div><p className="tabular font-display text-2xl font-bold"><CountUp value={d.kpis.activeAssignments} /></p><p className="text-[12px] text-ink-3">active jobs</p></div>
                 <div><p className="tabular font-display text-2xl font-bold text-signal-deep"><CountUp value={d.kpis.trackingNow} /></p><p className="text-[12px] text-ink-3">sharing GPS</p></div>
                 <div><p className={clsx("tabular font-display text-2xl font-bold", d.kpis.overdueAssignments ? "text-danger" : "")}><CountUp value={d.kpis.overdueAssignments} /></p><p className="text-[12px] text-ink-3">past due</p></div>

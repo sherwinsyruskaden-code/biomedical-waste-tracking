@@ -105,7 +105,7 @@ export function TrackingMap({
           )}
           <Marker position={[v.point.latitude, v.point.longitude]} icon={vehicleIcon(v)} eventHandlers={{ click: () => onSelect?.(v.assignmentId) }} title={v.label} zIndexOffset={1000}>
             <Popup>
-              <div dangerouslySetInnerHTML={{ __html: `<strong>${esc(v.label)}</strong>${v.sublabel ? `<br/>${esc(v.sublabel)}` : ""}<br/>Last fix ${esc(timeAgo(v.point.recordedAt))} (${esc(fmtDateTime(v.point.recordedAt))})${v.point.accuracyM != null ? `<br/>Accuracy ±${Math.round(v.point.accuracyM)} m` : ""}${v.point.source === "simulated" ? "<br/><b style='color:#d97706'>Simulated position (demo mode)</b>" : ""}${v.stale ? "<br/><b style='color:#e11d48'>Stale — no recent update</b>" : ""}` }} />
+              <div dangerouslySetInnerHTML={{ __html: `<strong>${esc(v.label)}</strong>${v.sublabel ? `<br/>${esc(v.sublabel)}` : ""}<br/>Last fix ${esc(timeAgo(v.point.recordedAt))} (${esc(fmtDateTime(v.point.recordedAt))})${v.point.accuracyM != null ? `<br/>Accuracy ±${Math.round(v.point.accuracyM)} m` : ""}${v.point.source === "simulated" ? "<br/><b style='color:#d97706'>Simulated position</b>" : ""}${v.stale ? "<br/><b style='color:#e11d48'>Stale — no recent update</b>" : ""}` }} />
             </Popup>
           </Marker>
         </Fragment>
@@ -122,7 +122,7 @@ export function MapLegend({ showRoute }: { showRoute?: boolean }) {
     <ul className="flex flex-wrap gap-x-5 gap-y-2 text-[12.5px] text-ink-2">
       {item(<span className="size-3 rounded-full bg-signal ring-2 ring-white" />, "Last reported position (device GPS)")}
       {item(<span className="size-3 rounded-full bg-ink-3 ring-2 ring-white" />, "Stale position")}
-      {item(<span className="size-3 rounded-full bg-warn ring-2 ring-white" />, "Simulated (demo mode)")}
+      {item(<span className="size-3 rounded-full bg-warn ring-2 ring-white" />, "Simulated")}
       {item(<span className="h-1 w-5 rounded bg-signal" />, "Recorded path")}
       {showRoute && item(<span className="h-0 w-5 border-t-2 border-dashed border-ink-3" />, "Planned route (not the actual path)")}
       {item(<span className="size-3 rounded-[4px] bg-emerald-600" />, "Facility")}

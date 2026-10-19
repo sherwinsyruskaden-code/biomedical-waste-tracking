@@ -31,6 +31,28 @@ async function assertTransporter(tx: Tx, orgId: string, userId: string) {
   if (!m) throw badRequest("Choose an active transporter from your organization.");
 }
 
+/**
+ * ONE ACTIVE ORDER PER TRANSPORTER. An order is active while it is assigned, accepted or in progress; it stops being
+ * active when it is completed (arrival recorded), declined or cancelled. Every code path that gives a transporter an
+ * order calls this inside its transaction. It first locks the transporter's user row, so two concurrent requests for
+ * the same person queue up and the second one sees the first one's order and is refused. The partial unique index
+ * `assignments_one_active_per_transporter_uq` (migration 0003) is the database-level backstop.
+ */
+export async function reserveTransporter(tx: Tx, orgId: string, userId: string, opts: { excludeAssignmentId?: string; self?: boolean } = {}) {
+  await assertTransporter(tx, orgId, userId);
+  await tx.execute(sql`select id from users where id = ${userId} for update`);
+  const [{ n }] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(assignments)
+    .where(and(eq(assignments.transporterUserId, userId), inArray(assignments.status, ["assigned", "accepted", "in_progress"]), opts.excludeAssignmentId ? ne(assignments.id, opts.excludeAssignmentId) : undefined));
+  if (n > 0) {
+    throw conflict(
+      opts.self ? "You already have an active order. Finish or decline it before accepting another." : "That transporter already has an active order. Choose an available transporter.",
+      { fields: { transporterUserId: "Not available" } },
+    );
+  }
+}
+
 async function assertFacility(tx: Tx, orgId: string, id: string, mustReceive = false) {
   const [f] = await tx.select().from(facilities).where(and(eq(facilities.id, id), eq(facilities.organizationId, orgId), eq(facilities.active, true)));
   if (!f) throw badRequest("Facility not found in this organization.");
@@ -76,7 +98,7 @@ async function linkBatches(tx: Tx, actor: Actor, asg: Assignment, batches: Batch
   }
 }
 
-async function unlinkBatches(tx: Tx, actor: Actor, asg: Assignment, batchIds: string[], reason: string) {
+async function unlinkBatches(tx: Tx, actor: Actor, asg: Assignment, batchIds: string[], reason: string, eventType: "unassigned" | "declined" = "unassigned") {
   if (!batchIds.length) return;
   const rows = await tx.select().from(wasteBatches).where(inArray(wasteBatches.id, batchIds)).for("update");
   for (const b of rows) {
@@ -88,7 +110,7 @@ async function unlinkBatches(tx: Tx, actor: Actor, asg: Assignment, batchIds: st
       .update(wasteBatches)
       .set({ currentAssignmentId: null, destinationFacilityId: null, updatedAt: new Date(), version: sql`${wasteBatches.version} + 1` })
       .where(eq(wasteBatches.id, b.id));
-    await tx.insert(custodyEvents).values({ organizationId: actor.orgId, batchId: b.id, eventType: "unassigned", fromStatus: b.status, toStatus: b.status, actorUserId: actor.userId, actorRole: actor.role, assignmentId: asg.id, notes: reason });
+    await tx.insert(custodyEvents).values({ organizationId: actor.orgId, batchId: b.id, eventType, fromStatus: b.status, toStatus: b.status, actorUserId: actor.userId, actorRole: actor.role, assignmentId: asg.id, notes: reason });
   }
 }
 
@@ -115,7 +137,7 @@ export async function createAssignment(actor: Actor, input: CreateAssignmentInpu
     assertDueTime(input.dueBy, input.scheduledPickupAt, tz);
   } else if (input.dueBy <= input.scheduledPickupAt) throw badRequest("The due time must be after the scheduled pickup.");
   const result = await db.transaction(async (tx) => {
-    await assertTransporter(tx, actor.orgId, input.transporterUserId);
+    await reserveTransporter(tx, actor.orgId, input.transporterUserId);
     await assertFacility(tx, actor.orgId, input.originFacilityId);
     await assertFacility(tx, actor.orgId, input.destinationFacilityId, true);
     const batches = await lockAssignableBatches(tx, actor.orgId, input.batchIds, input.originFacilityId);
@@ -153,18 +175,45 @@ export async function createAssignment(actor: Actor, input: CreateAssignmentInpu
   return result;
 }
 
-/** The active transporter with the fewest open jobs (ties: longest-serving member). */
+/**
+ * Transporters a hospital may choose from: active transporter members of the organization who are free right now
+ * (no assigned, accepted or in-progress order anywhere). `total` and `busy` let the screen say why the list is empty.
+ * Only what helps choosing is exposed: name, vehicle and phone.
+ */
+export async function eligibleTransporters(orgId: string) {
+  const rows = await db
+    .select({
+      userId: memberships.userId,
+      fullName: users.fullName,
+      phone: users.phone,
+      vehicleReg: memberships.vehicleReg,
+      activeOrders: sql<number>`(select count(*)::int from ${assignments} a where a.transporter_user_id = ${memberships.userId} and a.status in ('assigned','accepted','in_progress'))`,
+    })
+    .from(memberships)
+    .innerJoin(users, eq(users.id, memberships.userId))
+    .where(and(eq(memberships.organizationId, orgId), eq(memberships.role, "transporter"), eq(memberships.status, "active")))
+    .orderBy(users.fullName);
+  const available = rows.filter((r) => r.activeOrders === 0).map(({ activeOrders: _n, ...r }) => r);
+  return { items: available, total: rows.length, busy: rows.length - available.length };
+}
+
+/** API fallback when no transporter was chosen: the longest-serving transporter who is free right now. */
 async function pickTransporter(tx: Tx, orgId: string) {
   const [t] = await tx
     .select({ userId: memberships.userId })
     .from(memberships)
-    .where(and(eq(memberships.organizationId, orgId), eq(memberships.role, "transporter"), eq(memberships.status, "active")))
-    .orderBy(
-      sql`(select count(*) from ${assignments} a where a.organization_id = ${orgId} and a.transporter_user_id = ${memberships.userId} and a.status in ('assigned','accepted','in_progress'))`,
-      memberships.createdAt,
-    )
+    .where(and(
+      eq(memberships.organizationId, orgId),
+      eq(memberships.role, "transporter"),
+      eq(memberships.status, "active"),
+      sql`not exists (select 1 from ${assignments} a where a.transporter_user_id = ${memberships.userId} and a.status in ('assigned','accepted','in_progress'))`,
+    ))
+    .orderBy(memberships.createdAt)
     .limit(1);
-  if (!t) throw badRequest("No active transporter is available. Ask your organization admin to invite one.");
+  if (!t) {
+    const any = await tx.select({ id: memberships.id }).from(memberships).where(and(eq(memberships.organizationId, orgId), eq(memberships.role, "transporter"), eq(memberships.status, "active"))).limit(1);
+    throw badRequest(any.length ? "No transporter is available right now: every transporter has an active order." : "No active transporter is available. Ask your organization admin to invite one.");
+  }
   return t.userId;
 }
 
@@ -182,7 +231,7 @@ export async function collectionDestination(actor: Actor, batch: Batch) {
  * configured, authorised treatment plant (never chosen ad hoc) and the request goes to a transporter,
  * who must accept it. `opts.transporterUserId` is for the demo seeder only (deterministic demo data).
  */
-export async function requestCollection(actor: Actor, batchId: string, input: { notes?: string | null }, opts: { transporterUserId?: string } = {}) {
+export async function requestCollection(actor: Actor, batchId: string, input: { notes?: string | null; transporterUserId?: string }, opts: { transporterUserId?: string } = {}) {
   const [batch] = await db.select().from(wasteBatches).where(and(eq(wasteBatches.id, batchId), eq(wasteBatches.organizationId, actor.orgId)));
   if (!batch) throw notFound("Batch");
   const atOrigin = actor.role === "admin" || (actor.role === "facility_staff" && actor.facilityIds.includes(batch.originFacilityId));
@@ -195,7 +244,18 @@ export async function requestCollection(actor: Actor, batchId: string, input: { 
   if (batch.status === "generated") throw invalidTransition("Verify segregation before requesting collection.");
   if (batch.status !== "segregated") throw invalidTransition(`${batch.trackingCode} is ${batch.status.replace("_", " ")} and cannot be collected.`);
   const plant = await collectionDestination(actor, batch);
-  const transporterUserId = opts.transporterUserId ?? (await pickTransporter(db, actor.orgId));
+  // An explicit choice is validated and never overridden; the least-busy fallback applies only when none was made.
+  const chosen = input.transporterUserId ?? opts.transporterUserId;
+  if (chosen) {
+    const eligible = await eligibleTransporters(actor.orgId);
+    if (!eligible.items.some((t) => t.userId === chosen)) {
+      const [m] = await db.select({ id: memberships.id }).from(memberships).where(and(eq(memberships.organizationId, actor.orgId), eq(memberships.userId, chosen), eq(memberships.role, "transporter"), eq(memberships.status, "active")));
+      throw m
+        ? conflict("That transporter already has an active order. Choose an available transporter.", { fields: { transporterUserId: "Not available" } })
+        : badRequest("That person is not an active transporter of your organization. Choose one from the list.", { fields: { transporterUserId: "Not an eligible transporter" } });
+    }
+  }
+  const transporterUserId = chosen ?? (await pickTransporter(db, actor.orgId));
   const now = Date.now();
   const asg = await createAssignment(actor, {
     transporterUserId,
@@ -206,12 +266,7 @@ export async function requestCollection(actor: Actor, batchId: string, input: { 
     dueBy: new Date(now + COLLECTION_WINDOW_HOURS * 3600_000),
     notes: input.notes ? `Collection request: ${input.notes}` : "Collection requested by hospital staff.",
   });
-  await notify(db, actor.orgId, { facilityStaffAt: [plant.id] }, {
-    kind: "assignment",
-    title: `Incoming waste: ${batch.trackingCode}`,
-    body: `Collection requested. A transporter will deliver it to ${plant.name}.`,
-    link: `/batches/${batch.id}`,
-  });
+  // The plant is not told yet: it only sees a batch once the transporter has accepted, collected it and set off.
   return asg;
 }
 
@@ -231,14 +286,25 @@ export async function assignmentAction(actor: Actor, id: string, action: AsgActi
     if (action === "accept") {
       if (a.transporterUserId !== actor.userId) throw forbidden("Only the assigned transporter can accept this job.");
       if (a.status !== "assigned") throw invalidTransition(`This job is already ${a.status.replace("_", " ")}.`);
+      await reserveTransporter(tx, actor.orgId, a.transporterUserId, { excludeAssignmentId: a.id, self: true });
       patch = { status: "accepted", acceptedAt: now };
     } else if (action === "decline") {
       if (a.transporterUserId !== actor.userId) throw forbidden("Only the assigned transporter can decline this job.");
       if (a.status !== "assigned" && a.status !== "accepted") throw invalidTransition("Jobs can only be declined before pickup.");
       if (!reason) throw badRequest("Please give a reason for declining.");
-      await unlinkBatches(tx, actor, a, openBatches.map((r) => r.b.id), `Declined by transporter: ${reason}`);
-      patch = { status: "cancelled", cancelledAt: now, cancelReason: `Declined: ${reason}`, trackingActive: false };
-      await notify(tx, actor.orgId, { admins: true }, { kind: "assignment", title: `Job ${a.reference} declined`, body: reason, link: `/assignments/${a.id}` });
+      await unlinkBatches(tx, actor, a, openBatches.map((r) => r.b.id), `Declined by transporter: ${reason}`, "declined");
+      patch = { status: "declined", declinedAt: now, cancelReason: reason, trackingActive: false };
+      // The hospital that asked for the collection (its staff and the organization admins) is told, with the next step.
+      const [t] = await tx.select({ fullName: users.fullName }).from(users).where(eq(users.id, a.transporterUserId));
+      const tz = await orgTimezone(actor.orgId);
+      const when = now.toLocaleString("en-IN", { timeZone: tz, dateStyle: "medium", timeStyle: "short" });
+      const codes = openBatches.map((r) => r.b.trackingCode).join(", ");
+      await notify(tx, actor.orgId, { facilityStaffAt: [a.originFacilityId], admins: true }, {
+        kind: "assignment.declined",
+        title: `Collection declined: ${codes}`,
+        body: `${t?.fullName ?? "The transporter"} declined collection ${a.reference} on ${when}. Reason: ${reason}. It is no longer assigned: open the batch and request collection again, choosing an available transporter.`,
+        link: `/batches/${openBatches[0]?.b.id ?? ""}`.replace(/\/$/, "") || "/assignments",
+      });
     } else if (action === "start") {
       if (a.transporterUserId !== actor.userId) throw forbidden("Only the assigned transporter can start this trip.");
       if (a.status !== "accepted") throw invalidTransition(a.status === "assigned" ? "Accept the job before starting the trip." : `This job is already ${a.status.replace("_", " ")}.`);
@@ -252,6 +318,13 @@ export async function assignmentAction(actor: Actor, id: string, action: AsgActi
         await tx.insert(custodyEvents).values({ organizationId: actor.orgId, batchId: b.id, eventType: "transit_started", fromStatus: b.status, toStatus: "in_transit", actorUserId: actor.userId, actorRole: actor.role, assignmentId: a.id, facilityId: a.originFacilityId });
       }
       patch = { status: "in_progress", startedAt: now };
+      const [tr] = await tx.select({ fullName: users.fullName }).from(users).where(eq(users.id, a.transporterUserId));
+      await notify(tx, actor.orgId, { facilityStaffAt: [a.destinationFacilityId] }, {
+        kind: "transport.started",
+        title: `On the way: ${openBatches.map((r) => r.b.trackingCode).join(", ")}`,
+        body: `${tr?.fullName ?? "The transporter"} has started the trip to your plant.`,
+        link: `/batches/${openBatches[0].b.id}`,
+      });
     } else if (action === "cancel") {
       if (actor.role !== "admin") throw forbidden("Only an admin can cancel a job.");
       if (a.status === "completed" || a.status === "cancelled") throw invalidTransition(`This job is already ${a.status}.`);
@@ -279,7 +352,7 @@ export async function updateAssignment(
     if (a.status !== "assigned" && a.status !== "accepted") throw invalidTransition("A job can only be edited before the trip starts.");
     const patch: Partial<typeof assignments.$inferInsert> = { updatedAt: new Date() };
     if (input.transporterUserId && input.transporterUserId !== a.transporterUserId) {
-      await assertTransporter(tx, actor.orgId, input.transporterUserId);
+      await reserveTransporter(tx, actor.orgId, input.transporterUserId, { excludeAssignmentId: a.id });
       const picked = await tx
         .select({ id: wasteBatches.id })
         .from(assignmentBatches)
@@ -344,6 +417,8 @@ export async function createRerouteAssignment(tx: Tx, actor: Actor, batch: Batch
   const fromId = batch.destinationFacilityId ?? previous.destinationFacilityId;
   if (destinationFacilityId === fromId) throw badRequest("Choose a different receiving facility.");
   await assertFacility(tx, actor.orgId, destinationFacilityId, true);
+  // The load stays with the same transporter; they must not already hold another active order.
+  await reserveTransporter(tx, actor.orgId, previous.transporterUserId);
   const now = new Date();
   assertRerouteDue(dueBy, await orgTimezone(actor.orgId));
   await tx.update(assignmentBatches).set({ removedAt: now }).where(and(eq(assignmentBatches.batchId, batch.id), isNull(assignmentBatches.removedAt)));

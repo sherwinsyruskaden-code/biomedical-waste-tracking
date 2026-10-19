@@ -114,7 +114,7 @@ async function acceptInvite(link, name) {
 console.log(`\nBWTS end-to-end acceptance — ${BASE}\n`);
 const adminEmail = `admin-${run}@e2e.test`;
 const admin = await newUser();
-let staff, plant, driver, platform, batchId, labelPayload, assignmentId, staffEmail;
+let staff, plant, driver, platform, batchId, batchCode, labelPayload, assignmentId, staffEmail;
 const orgName = `E2E Hospital ${run}`;
 
 try {
@@ -123,10 +123,14 @@ try {
     await admin.page.getByLabel("Full name").fill("Esha E2E Admin");
     await admin.page.getByLabel("Work email").fill(adminEmail);
     await admin.page.getByLabel(/^Password/).fill(PASSWORD);
-    await admin.page.getByLabel("Confirm password").fill(PASSWORD);
+    await admin.page.getByLabel(/^Confirm password/).fill(PASSWORD);
     await admin.page.getByLabel("Organization name").fill(orgName);
     await admin.page.getByLabel("Facility name").fill("E2E General Hospital");
+    await admin.page.getByLabel("Facility Registration ID").fill(`E2E-REG-${run}`);
     await admin.page.getByLabel("Address").fill("1 Test Road, Tambaram");
+    await admin.page.getByLabel("City").fill("Chennai");
+    await admin.page.getByLabel("State").fill("Tamil Nadu");
+    await admin.page.getByLabel("Postal code").fill("600045");
     await admin.page.getByLabel("Latitude").fill(String(HOSPITAL.latitude));
     await admin.page.getByLabel("Longitude").fill(String(HOSPITAL.longitude));
     await admin.page.getByRole("checkbox", { name: /terms/ }).check();
@@ -136,13 +140,17 @@ try {
     assert.equal(await api(admin.page).status("/api/batches"), 403);
   });
 
-  await check("1b. A platform administrator reviews the registration and approves it", async () => {
+  await check("1b. The Main Admin (review permission) approves it from Organization approvals", async () => {
     platform = await newUser();
     await platform.page.goto("/");
-    await platform.page.locator('[data-demo="platform"]').click();
-    await platform.page.waitForURL("**/platform", { timeout: 90000 });
+    await platform.page.locator('[data-demo="admin"]').click();
+    await platform.page.waitForURL("**/dashboard", { timeout: 90000 });
+    await platform.page.getByRole("link", { name: /Organization approvals/ }).click();
+    await platform.page.waitForURL("**/approvals");
     const card = platform.page.getByTestId("org-review").filter({ hasText: orgName });
-    await card.getByText(adminEmail).first().waitFor();
+    await card.getByTestId("review-admin-email").filter({ hasText: adminEmail }).waitFor(); // the full address, as stored
+    await card.getByTestId("review-registration-id").filter({ hasText: `E2E-REG-${run}` }).waitFor();
+    await card.getByTestId("review-address").filter({ hasText: "1 Test Road, Tambaram" }).waitFor();
     await card.getByRole("button", { name: "Approve" }).click();
     await platform.page.getByRole("dialog").getByRole("button", { name: "Approve organization" }).click();
     await platform.page.getByText(`${orgName} approved`).waitFor();
@@ -197,9 +205,11 @@ try {
     await p.getByLabel("Number of containers").fill("2");
     await p.getByLabel("Ward / department").fill("Ward 7");
     await p.getByRole("button", { name: "Register & create labels" }).click();
-    await p.waitForURL(/\/batches\/[0-9a-f-]+\/labels/);
+    await p.waitForURL(/\/batches\/[0-9a-f-]+\/qr/); // the batch's own QR is shown straight after registering
     batchId = p.url().split("/batches/")[1].split("/")[0];
     await p.getByRole("img", { name: /QR code for/ }).first().waitFor();
+    batchCode = (await p.getByTestId("qr-tracking-code").innerText()).trim();
+    assert.match(await p.getByTestId("qr-tracking-code").innerText(), /^BW-/);
     const labels = await api(p).get(`/api/batches/${batchId}/labels`);
     assert.equal(labels.labels.length, 2);
     labelPayload = labels.labels[0].payload;
@@ -230,6 +240,7 @@ try {
     await p.getByRole("button", { name: "Request collection" }).click();
     const d = p.getByRole("dialog");
     await d.getByText("E2E Treatment Plant", { exact: true }).waitFor();
+    await d.getByLabel("Assign transporter").selectOption({ index: 1 }); // the transporter is chosen by the hospital
     await d.getByRole("button", { name: "Send request" }).click();
     await p.getByText("Collection requested — transporter assigned").first().waitFor();
     const b = await api(p).get(`/api/batches/${batchId}`);
@@ -277,23 +288,34 @@ try {
     await p.screenshot({ path: shotsDir + "tracking.png" });
   });
 
-  await check("11. Transporter hands over at the destination (scan); job completes and sharing stops", async () => {
+  await check("11. Transporter records arrival at the plant (no second scan); job completes and sharing stops", async () => {
     const p = driver.page;
-    await p.getByRole("button", { name: "Scan handover" }).click();
+    await p.getByRole("button", { name: "Mark arrived at treatment plant" }).click();
     const d = p.getByRole("dialog");
-    await d.getByTestId("scanner-image-input").setInputFiles(await qrImage(labelPayload));
-    await d.getByText("QR label captured").waitFor();
-    await d.getByRole("button", { name: "Hand over at destination" }).click();
+    assert.equal(await d.getByTestId("scanner-image-input").count(), 0, "the transporter is asked to scan on arrival");
+    await d.getByRole("button", { name: "Mark arrived at treatment plant" }).click();
     await p.getByText("Completed").first().waitFor();
     const a = await api(p).get(`/api/assignments/${assignmentId}`);
     assert.equal(a.trackingActive, false);
+    // Arrival is not receipt: the batch waits for the plant, and the transporter cannot confirm it for them.
+    assert.equal((await api(p).get(`/api/batches/${batchId}`)).status, "delivered");
+    assert.notEqual(await api(p).post(`/api/batches/${batchId}/actions/receive`, { accepted: true, receivedQuantity: 14.5, unit: "kg", condition: "intact" }), 200);
+    assert.equal((await api(p).get(`/api/batches/${batchId}`)).status, "delivered");
   });
 
-  await check("12. Plant staff confirm receipt and record disposal", async () => {
+  await check("12. Plant staff scan the arriving batch's QR, confirm receipt and record disposal", async () => {
     const p = plant.page;
-    await p.goto("/receiving");
-    await p.getByRole("button", { name: "Confirm receipt" }).first().click();
+    await p.goto("/dashboard");
+    const arrivals = p.getByTestId("plant-arrivals");
+    await arrivals.getByText("Arrived — awaiting receipt").first().waitFor();
+    await arrivals.locator("li").filter({ hasText: batchCode }).getByText(/Dev Driver/).waitFor(); // origin, transporter and time are shown
+    await p.getByRole("link", { name: "Scan Incoming Batch" }).first().click();
+    await p.getByTestId("scanner-image-input").setInputFiles(await qrImage(labelPayload));
+    await p.getByText("Label recognised").waitFor();
+    await p.getByRole("link", { name: batchCode }).waitFor();
+    await p.getByRole("button", { name: "Confirm receipt" }).click();
     let d = p.getByRole("dialog");
+    await d.getByText("QR label scanned").waitFor();
     await d.getByLabel("Weighed quantity").fill("14.4");
     await d.getByRole("button", { name: "Confirm receipt" }).click();
     await expectToast(p, "Receipt recorded", d);
@@ -308,7 +330,7 @@ try {
   await check("13. The complete lifecycle history is shown on the batch", async () => {
     const p = admin.page;
     await p.goto(`/batches/${batchId}`);
-    for (const t of ["Batch registered", "Segregation verified", "Collection requested — transporter assigned", "Picked up — custody to transporter", "Trip started", "Handed over at destination", "Receipt confirmed", "Disposal recorded"]) await p.getByText(t, { exact: true }).first().waitFor();
+    for (const t of ["Batch registered", "Segregation verified", "Collection requested — transporter assigned", "Picked up — custody to transporter", "Trip started", "Arrived at treatment plant — awaiting receipt", "Receipt confirmed", "Disposal recorded"]) await p.getByText(t, { exact: true }).first().waitFor();
     await p.screenshot({ path: shotsDir + "batch-detail.png", fullPage: true });
   });
 
@@ -326,7 +348,7 @@ try {
   await check("15. Another organization cannot open this batch", async () => {
     const other = await newUser();
     await other.page.goto("/");
-    const r = await api(other.page).post("/api/auth/signup", { fullName: "Other Admin", email: `other-${run}@e2e.test`, password: PASSWORD, confirmPassword: PASSWORD, organization: { name: `Other Org ${run}`, type: "clinic" }, acceptTerms: true });
+    const r = await api(other.page).post("/api/auth/signup", { fullName: "Other Admin", email: `other-${run}@e2e.test`, password: PASSWORD, confirmPassword: PASSWORD, organization: { name: `Other Org ${run}`, type: "clinic" }, facility: { name: "Other Clinic", kind: "hospital", registrationId: `OTH-${run}`, address: "9 Other Road", city: "Chennai", state: "Tamil Nadu", postalCode: "600001" }, acceptTerms: true });
     assert.equal(r, 201);
     const otherOrg = (await api(other.page).get("/api/auth/me")).organization.id;
     assert.equal(await api(platform.page).post(`/api/platform/organizations/${otherOrg}/approve`, {}), 200);
@@ -343,7 +365,7 @@ try {
     await p.getByRole("menuitem", { name: "Sign out" }).click();
     await p.waitForURL("**/login");
     await p.getByLabel("Work email").fill(staffEmail);
-    await p.getByLabel("Password").fill(PASSWORD);
+    await p.getByLabel("Password", { exact: true }).fill(PASSWORD);
     await p.getByRole("button", { name: "Sign in" }).click();
     await p.waitForURL("**/dashboard");
     await p.goto(`/batches/${batchId}`);

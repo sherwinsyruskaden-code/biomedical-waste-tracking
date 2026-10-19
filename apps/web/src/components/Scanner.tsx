@@ -18,8 +18,8 @@ import { Button, Select } from "./ui";
 export interface ScanResult {
   method: "qr";
   value: string;
-  /** "camera" = live camera; "manual_entry" = image upload or the demo shortcut (recorded as such in the audit log). */
-  source: "camera" | "manual_entry";
+  /** "camera" = live camera; "manual_entry" = image upload; "simulated" = picked from a batch in the sample organization (no physical scan). */
+  source: "camera" | "manual_entry" | "simulated";
 }
 
 function CameraScanner({ onResult, onUnavailable, paused }: { onResult: (r: ScanResult) => void; onUnavailable: (reason: string) => void; paused?: boolean }) {
@@ -110,52 +110,49 @@ function ImageUpload({ onResult }: { onResult: (r: ScanResult) => void }) {
   );
 }
 
-interface DemoLabelBatch {
+interface BatchQrOption {
   batchId: string;
   trackingCode: string;
   status: string;
   labels: { label: string; payload: string }[];
 }
 
-/** Demo organization only: stands in for the camera when none is available. Labelled as a shortcut, never as a scan. */
-function DemoShortcut({ onResult }: { onResult: (r: ScanResult) => void }) {
-  const { data: me } = useMe();
-  const q = useQuery({ queryKey: ["demo-labels"], queryFn: () => api.get<{ batches: DemoLabelBatch[] }>("/api/demo/labels"), enabled: !!me?.features.demoMode && /DEMO/.test(me.organization?.name ?? ""), retry: false });
+/**
+ * Sample organization only: choose a batch (newest first, so the one just registered is on top) and use ITS OWN
+ * QR code without a camera. The result is marked as a simulated scan; it is never recorded as a physical one.
+ */
+function BatchQrPicker({ onResult }: { onResult: (r: ScanResult) => void }) {
+  const q = useQuery({ queryKey: ["demo-labels"], queryFn: () => api.get<{ batches: BatchQrOption[] }>("/api/demo/labels"), retry: false });
   const [pick, setPick] = useState("");
   const items = (q.data?.batches ?? []).filter((b) => b.labels.length > 0);
   if (!items.length) return null;
   const chosen = items.find((b) => b.batchId === (pick || items[0].batchId))!;
   return (
-    <div className="rounded-[14px] border border-dashed border-amber-400 bg-amber-50 p-3.5 text-sm" data-testid="demo-shortcut">
-      <p className="font-semibold text-amber-900">Demo shortcut — no camera needed</p>
-      <p className="mt-0.5 text-amber-900/80">Pretend one of the synthetic demo labels was scanned. This is recorded as a manual action, not a camera scan.</p>
+    <div className="rounded-[14px] border border-dashed border-amber-400 bg-amber-50 p-3.5 text-sm" data-testid="batch-qr-picker">
+      <p className="font-semibold text-amber-900">Use a batch's QR (simulated scan)</p>
       <div className="mt-2.5 flex flex-wrap gap-2">
-        <Select value={chosen.batchId} onChange={(e) => setPick(e.target.value)} aria-label="Demo label" className="min-w-[14rem] flex-1">
+        <Select value={chosen.batchId} onChange={(e) => setPick(e.target.value)} aria-label="Batch" className="min-w-[14rem] flex-1">
           {items.map((b) => (
             <option key={b.batchId} value={b.batchId}>{b.trackingCode} · {b.status.replaceAll("_", " ")}</option>
           ))}
         </Select>
-        <Button type="button" variant="secondary" onClick={() => onResult({ method: "qr", value: chosen.labels[0].payload, source: "manual_entry" })}>Use this demo label</Button>
+        <Button type="button" variant="secondary" onClick={() => onResult({ method: "qr", value: chosen.labels[0].payload, source: "simulated" })}>Use this batch's QR</Button>
       </div>
     </div>
   );
 }
 
 export function Scanner({ onResult, paused }: { onResult: (r: ScanResult) => void; paused?: boolean }) {
-  const [unavailable, setUnavailable] = useState<string | null>(null);
+  const [, setUnavailable] = useState<string | null>(null);
   const { data: me } = useMe();
-  const inDemoOrg = !!me?.features.demoMode && /DEMO/.test(me.organization?.name ?? "");
+  const inSampleOrg = !!me?.features.demoOrg;
   return (
     <div className="flex flex-col gap-3">
       <CameraScanner onResult={onResult} onUnavailable={setUnavailable} paused={paused} />
       <p className="flex items-center gap-2 text-[13px] text-ink-3"><QrCode className="size-4 shrink-0" /> Hold a container's QR label inside the frame. It scans automatically.</p>
       <ImageUpload onResult={onResult} />
-      {unavailable && inDemoOrg && <DemoShortcut onResult={onResult} />}
-      {inDemoOrg && (
-        <p className="text-[13px] text-ink-2">
-          Presenting? <Link to="/demo-labels" className="font-semibold text-emerald-700 underline underline-offset-2">Open the demo QR labels</Link> and point this camera at the screen.
-        </p>
-      )}
+      {inSampleOrg && <BatchQrPicker onResult={onResult} />}
+      <p className="text-[13px] text-ink-2">Using your batch QR? Open the QR code from the batch you created, then scan it here.</p>
     </div>
   );
 }

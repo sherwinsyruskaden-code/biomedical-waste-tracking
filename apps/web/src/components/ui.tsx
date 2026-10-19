@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import clsx from "clsx";
-import { AlertTriangle, Loader2, X } from "lucide-react";
-import { forwardRef, useEffect, useId, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { AlertTriangle, Eye, EyeOff, Loader2, X } from "lucide-react";
+import { forwardRef, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { ApiError } from "../lib/api";
 import { statusMeta } from "../lib/format";
 import type { BatchStatus } from "../lib/types";
@@ -63,6 +63,29 @@ const inputBase = "w-full rounded-[10px] border bg-paper px-3 text-[14.5px] text
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }>(function Input({ invalid, className, ...rest }, ref) {
   return <input ref={ref} aria-invalid={invalid || undefined} className={clsx(inputBase, "h-10", invalid ? "border-danger" : "border-line-2", className)} {...rest} />;
+});
+
+/**
+ * A password field with a show/hide button. The text stays masked until the person presses the button; pressing it again
+ * masks it. Only the typed text is affected: the value is never cleared or changed by toggling, and nothing is fetched.
+ * Keyboard and screen-reader friendly: a real button with a changing label and aria-pressed.
+ */
+export const PasswordInput = forwardRef<HTMLInputElement, Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & { invalid?: boolean; label?: string }>(function PasswordInput({ invalid, className, label = "password", ...rest }, ref) {
+  const [shown, setShown] = useState(false);
+  return (
+    <div className="relative">
+      <Input ref={ref} type={shown ? "text" : "password"} invalid={invalid} className={clsx("pr-11", className)} {...rest} />
+      <button
+        type="button"
+        onClick={() => setShown((v) => !v)}
+        aria-label={`${shown ? "Hide" : "Show"} ${label}`}
+        aria-pressed={shown}
+        className="absolute right-1.5 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-lg text-ink-3 transition-colors hover:bg-mist hover:text-ink focus-visible:outline-2 focus-visible:outline-emerald-600"
+      >
+        {shown ? <EyeOff className="size-[18px]" aria-hidden /> : <Eye className="size-[18px]" aria-hidden />}
+      </button>
+    </div>
+  );
 });
 
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }>(function Select({ invalid, className, children, ...rest }, ref) {

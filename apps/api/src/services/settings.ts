@@ -22,6 +22,8 @@ export const orgSettingsSchema = z.object({
   weightTolerancePercent: z.number().min(0).max(100).default(10),
   /** Where collection requests are delivered. Empty = the organization's only treatment plant. */
   defaultTreatmentFacilityId: z.string().uuid().nullable().default(null),
+  /** Internal marker: which sample-data layout this organization was last refreshed to (see services/demo.ts). */
+  sampleDataVersion: z.number().int().nullable().default(null),
 });
 
 export type OrgSettings = z.infer<typeof orgSettingsSchema>;

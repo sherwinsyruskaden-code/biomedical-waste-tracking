@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { Button, Checkbox, ErrorState, Field, FormError, Input, LoadingBlock, fieldError } from "../../components/ui";
+import { Button, Checkbox, ErrorState, Field, FormError, Input, LoadingBlock, fieldError, PasswordInput } from "../../components/ui";
 import { api } from "../../lib/api";
+import { PASSWORD_HINT, passwordIssue } from "../../lib/password";
 import { roleLabel } from "../../lib/format";
 import { useMe } from "../../lib/session";
 import type { Role } from "../../lib/types";
@@ -50,14 +51,14 @@ export default function AcceptInvite() {
                 <Field label="Full name" htmlFor="name" error={fieldError(m.error, "fullName")} required>
                   <Input id="name" autoComplete="name" defaultValue={inv.fullName ?? ""} onChange={(e) => setFullName(e.target.value)} />
                 </Field>
-                <Field label="Create a password" htmlFor="pw" hint="10+ characters, letters and numbers" error={fieldError(m.error, "password")} required>
-                  <Input id="pw" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                <Field label="Create a password" htmlFor="pw" hint={PASSWORD_HINT} error={(password ? passwordIssue(password) : null) ?? fieldError(m.error, "password")} required>
+                  <PasswordInput id="pw" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
                 </Field>
               </>
             )}
             <Checkbox checked={accept} onChange={setAccept} label={<>I accept the <Link to="/terms" target="_blank" className="font-semibold text-emerald-700 underline">terms and privacy notice</Link>.</>} />
             <FormError error={m.error} />
-            <Button type="submit" size="lg" loading={m.isPending} disabled={!accept}>Accept invitation</Button>
+            <Button type="submit" size="lg" loading={m.isPending} disabled={!accept || (!inv.existingAccount && !!passwordIssue(password))}>Accept invitation</Button>
           </>
         )}
       </form>

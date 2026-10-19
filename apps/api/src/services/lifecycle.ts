@@ -10,7 +10,7 @@
  *  - writes an append-only custody event (and optional receipt / disposal record),
  *  - supports an Idempotency-Key so a retried request cannot double-apply.
  */
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, notInArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type Tx } from "../db/client.js";
 import {
@@ -100,6 +100,8 @@ interface CheckCtx {
 
 const atFacility = (a: Actor, facilityId: string | null) =>
   a.role === "admin" || (a.role === "facility_staff" && !!facilityId && a.facilityIds.includes(facilityId));
+/** Staff assigned to this facility. Unlike atFacility, an organization admin does NOT count: plant steps belong to plant staff. */
+const staffAt = (a: Actor, facilityId: string | null) => a.role === "facility_staff" && !!facilityId && a.facilityIds.includes(facilityId);
 const isAssignedTransporter = (a: Actor, asg: Assignment | null) =>
   !!asg && a.role === "transporter" && asg.transporterUserId === a.userId;
 
@@ -153,12 +155,13 @@ export const actions: Record<ActionName, ActionDef> = {
     },
   },
   handover: {
-    label: "Hand over at destination",
+    // Arrival at the plant. The batch becomes "delivered" (shown as Arrived — awaiting receipt); it is NOT received until plant staff confirm.
+    label: "Mark arrived at treatment plant",
     from: ["in_transit"],
     to: "delivered",
     check: ({ actor, assignment }) => {
       if (!assignment || assignment.status !== "in_progress") return "The transport assignment must be in progress.";
-      if (!isAssignedTransporter(actor, assignment) && actor.role !== "admin") return "Only the assigned transporter can record the handover.";
+      if (!isAssignedTransporter(actor, assignment)) return "Only the assigned transporter can record the arrival.";
       return null;
     },
   },
@@ -166,13 +169,13 @@ export const actions: Record<ActionName, ActionDef> = {
     label: "Confirm receipt",
     from: ["delivered"],
     to: (b: { accepted: boolean }) => (b.accepted ? "received" : "rejected"),
-    check: ({ batch, actor }) => (atFacility(actor, batch.destinationFacilityId) ? null : "Only staff assigned to the receiving facility (or an admin) can confirm receipt."),
+    check: ({ batch, actor }) => (staffAt(actor, batch.destinationFacilityId) ? null : "Only treatment-plant staff at the receiving facility can confirm receipt."),
   },
   dispose: {
     label: "Record disposal",
     from: ["received"],
     to: "disposed",
-    check: ({ batch, actor }) => (atFacility(actor, batch.destinationFacilityId) ? null : "Only staff at the receiving facility (or an admin) can record disposal."),
+    check: ({ batch, actor }) => (staffAt(actor, batch.destinationFacilityId) ? null : "Only treatment-plant staff at the receiving facility can record disposal."),
   },
   reroute: {
     label: "Reroute rejected load",
@@ -309,8 +312,9 @@ export async function performAction(
           break;
         }
         case "handover": {
-          if (body.scanMethod === "manual" && !body.notes) throw badRequest("A note is required when the handover is recorded without scanning.");
-          event.containerId = await verifyScan(tx, batch, String(body.scanMethod), body.identifier);
+          // The transporter records arrival without scanning; the treatment plant scans (or selects) the batch to confirm receipt.
+          event.containerId = body.scanMethod && body.scanMethod !== "manual" ? await verifyScan(tx, batch, String(body.scanMethod), body.identifier) : null;
+          if (!body.scanMethod || body.scanMethod === "manual") event.scanMethod = null; // arrival is not a scan
           eventType = "handover";
           event.facilityId = batch.destinationFacilityId;
           event.fromCustodianUserId = batch.currentCustodianUserId;
@@ -320,8 +324,8 @@ export async function performAction(
           afterCommit.push(async () => {
             await notify(db, actor.orgId, { facilityStaffAt: [batch.destinationFacilityId] }, {
               kind: "handover",
-              title: `Waste delivered: ${batch.trackingCode}`,
-              body: "A transporter handed over this batch. Please confirm receipt.",
+              title: `Arrived at your plant: ${batch.trackingCode}`,
+              body: "The transporter has arrived. Open the batch and confirm receipt.",
               link: `/batches/${batch.id}`,
             });
           });
@@ -334,7 +338,7 @@ export async function performAction(
           eventType = b.accepted ? "received" : "rejected";
           event.facilityId = batch.destinationFacilityId;
           event.fromCustodianFacilityId = batch.destinationFacilityId;
-          event.details = { receivedQuantity: b.receivedQuantity, unit: b.unit, condition: b.condition };
+          event.details = { ...(event.details as object | undefined), receivedQuantity: b.receivedQuantity, unit: b.unit, condition: b.condition };
           await tx.insert(receiptRecords).values({
             organizationId: actor.orgId,
             batchId: batch.id,
@@ -356,34 +360,6 @@ export async function performAction(
             patch.currentCustodianFacilityId = null;
             patch.currentCustodianUserId = transporter;
             event.toCustodianUserId = transporter;
-          }
-          // Weight discrepancy / damaged condition → incident
-          const [org] = await tx.select({ settings: organizations.settings }).from(organizations).where(eq(organizations.id, actor.orgId));
-          const tolerance = readSettings(org.settings).weightTolerancePercent;
-          const discrepancy = b.unit === batch.unit && batch.quantity > 0 ? (Math.abs(b.receivedQuantity - batch.quantity) / batch.quantity) * 100 : 0;
-          if (discrepancy > tolerance) {
-            await tx.insert(incidents).values({
-              organizationId: actor.orgId,
-              batchId: batch.id,
-              assignmentId: batch.currentAssignmentId,
-              facilityId: batch.destinationFacilityId,
-              type: "weight_discrepancy",
-              severity: discrepancy > tolerance * 3 ? "high" : "medium",
-              description: `Received ${b.receivedQuantity} ${b.unit} vs ${batch.quantity} ${batch.unit} recorded at generation (${discrepancy.toFixed(1)}% difference, tolerance ${tolerance}%).`,
-              reportedById: actor.userId,
-            });
-          }
-          if (b.condition !== "intact") {
-            await tx.insert(incidents).values({
-              organizationId: actor.orgId,
-              batchId: batch.id,
-              assignmentId: batch.currentAssignmentId,
-              facilityId: batch.destinationFacilityId,
-              type: b.condition === "leaking" ? "leak" : b.condition === "damaged" ? "damaged_container" : "wrong_segregation",
-              severity: b.condition === "leaking" ? "high" : "medium",
-              description: `Received in ${b.condition} condition.${b.notes ? " " + b.notes : ""}`,
-              reportedById: actor.userId,
-            });
           }
           if (!b.accepted) {
             afterCommit.push(async () => {
@@ -513,6 +489,12 @@ async function recordInvalidAttempt(actor: Actor, batchId: string, action: strin
 }
 
 /**
+ * Statuses a treatment plant may see for batches addressed to it: from "collected" (on its way) onward. Batches that are
+ * only generated or segregated, requested but not yet accepted, declined or cancelled never reach the plant's views.
+ */
+export const PLANT_VISIBLE_STATUSES = ["collected", "in_transit", "delivered", "received", "disposed", "rejected"] as const;
+
+/**
  * Read access to a batch:
  *  admin → all org batches; facility staff → batches originating at or destined for their facilities;
  *  transporter → batches currently or previously on their assignments.
@@ -520,7 +502,7 @@ async function recordInvalidAttempt(actor: Actor, batchId: string, action: strin
 export function canView(actor: Actor, batch: Batch, assignment: Assignment | null, wasOnTransporterAssignment = false) {
   if (actor.role === "admin") return true;
   if (actor.role === "facility_staff")
-    return actor.facilityIds.includes(batch.originFacilityId) || (!!batch.destinationFacilityId && actor.facilityIds.includes(batch.destinationFacilityId));
+    return actor.facilityIds.includes(batch.originFacilityId) || (!!batch.destinationFacilityId && actor.facilityIds.includes(batch.destinationFacilityId) && (PLANT_VISIBLE_STATUSES as readonly string[]).includes(batch.status));
   return (assignment?.transporterUserId === actor.userId) || wasOnTransporterAssignment;
 }
 
@@ -530,10 +512,10 @@ export function visibilityFilter(actor: Actor) {
   if (actor.role === "facility_staff") {
     if (!actor.facilityIds.length) return sql`false`;
     const ids = sql.join(actor.facilityIds.map((id) => sql`${id}::uuid`), sql`, `);
-    return sql`(${wasteBatches.originFacilityId} in (${ids}) or ${wasteBatches.destinationFacilityId} in (${ids}))`;
+    return sql`(${wasteBatches.originFacilityId} in (${ids}) or (${wasteBatches.destinationFacilityId} in (${ids}) and ${wasteBatches.status} in ('collected','in_transit','delivered','received','disposed','rejected')))`;
   }
   return sql`exists (select 1 from ${assignmentBatches} ab join ${assignments} a on a.id = ab.assignment_id
-    where ab.batch_id = ${wasteBatches.id} and a.transporter_user_id = ${actor.userId})`;
+    where ab.batch_id = ${wasteBatches.id} and a.transporter_user_id = ${actor.userId} and a.status not in ('declined','cancelled'))`;
 }
 
 export async function transporterHadBatch(tx: Tx, actor: Actor, batchId: string) {
@@ -542,7 +524,7 @@ export async function transporterHadBatch(tx: Tx, actor: Actor, batchId: string)
     .select({ id: assignmentBatches.id })
     .from(assignmentBatches)
     .innerJoin(assignments, eq(assignments.id, assignmentBatches.assignmentId))
-    .where(and(eq(assignmentBatches.batchId, batchId), eq(assignments.transporterUserId, actor.userId)))
+    .where(and(eq(assignmentBatches.batchId, batchId), eq(assignments.transporterUserId, actor.userId), notInArray(assignments.status, ["declined", "cancelled"])))
     .limit(1);
   return rows.length > 0;
 }

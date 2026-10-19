@@ -1,15 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AlertOctagon, ArrowLeft, ArrowRight, CheckCircle2, FlaskConical, MapPin, Navigation, Phone, Radio, ScanLine, Truck } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, FlaskConical, MapPin, Navigation, Phone, Radio, ScanLine, Truck } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import { toast } from "sonner";
 import { ActionDialog, type ActionTarget } from "../components/ActionDialog";
-import { IncidentDialog } from "../components/IncidentDialog";
 import { Badge, Button, CategoryChip, ErrorState, Field, FormError, LoadingBlock, Modal, Panel, Select, StatusBadge, Textarea } from "../components/ui";
 import { api } from "../lib/api";
 import { assignmentMeta, fmtDateTime, fmtQty, fmtTime, timeAgo } from "../lib/format";
-import { useMembers } from "../lib/queries";
+import { useAvailableTransporters } from "../lib/queries";
 import { onLiveLocation, useActor } from "../lib/session";
 import { useGeoTracking } from "../lib/useGeoTracking";
 import type { Assignment, BatchStatus, Facility, LocationPoint } from "../lib/types";
@@ -91,7 +90,6 @@ export default function AssignmentDetail() {
   const [dialog, setDialog] = useState<{ action: "pickup" | "handover"; target: ActionTarget } | null>(null);
   const [reasonFor, setReasonFor] = useState<"decline" | "cancel" | null>(null);
   const [reason, setReason] = useState("");
-  const [incident, setIncident] = useState(false);
   const [reassign, setReassign] = useState(false);
   const refresh = () => {
     for (const k of ["assignment", "assignments", "batches", "batch", "dashboard", "tracking"]) qc.invalidateQueries({ queryKey: [k] });
@@ -105,11 +103,11 @@ export default function AssignmentDetail() {
       refresh();
     },
   });
-  // Demo organization only: runs the real pickup / handover with the batch's real QR label, recorded as a simulated scan.
+  // Sample organization only: runs the real pickup / arrival with the batch's real QR label, recorded as a simulated scan.
   const simScan = useMutation({
-    mutationFn: ({ batchId, action }: { batchId: string; action: "pickup" | "handover" }) => api.post<{ batch: { trackingCode: string; status: BatchStatus }; container: string }>(`/api/demo/batches/${batchId}/simulate-scan`, { action }),
+    mutationFn: ({ batchId, action }: { batchId: string; action: "pickup" }) => api.post<{ batch: { trackingCode: string; status: BatchStatus }; container: string }>(`/api/demo/batches/${batchId}/simulate-scan`, { action }),
     onSuccess: (r, v) => {
-      toast.success(v.action === "pickup" ? `Picked up ${r.batch.trackingCode}` : `Handed over ${r.batch.trackingCode}`, { description: `Simulated QR scan of ${r.container} (demo — no camera used). Status: ${r.batch.status.replace("_", " ")}.` });
+      toast.success(`Picked up ${r.batch.trackingCode}`, { description: `Simulated QR scan of ${r.container} (no camera used). Status: ${r.batch.status.replace("_", " ")}.` });
       refresh();
     },
     onError: (e) => toast.error((e as Error).message),
@@ -118,7 +116,7 @@ export default function AssignmentDetail() {
     mutationFn: (run: boolean) => api.post<{ running: boolean }>(`/api/demo/assignments/${id}/simulate`, { run }),
     onSuccess: (r) => toast(r.running ? "Simulated trip running" : "Simulation stopped", { description: r.running ? "Positions are stored and shown as SIMULATED." : undefined }),
   });
-  const transporters = useMembers("transporter");
+  const transporters = useAvailableTransporters(reassign);
   const [newTransporter, setNewTransporter] = useState("");
   const reassignM = useMutation({
     mutationFn: () => api.patch(`/api/assignments/${id}`, { transporterUserId: newTransporter }),
@@ -140,9 +138,9 @@ export default function AssignmentDetail() {
     { label: "Accept the collection request", done: a.status !== "assigned" },
     { label: "Scan each batch at pickup", done: pickedAll && a.status !== "assigned" },
     { label: "Start the trip (share location)", done: a.status === "in_progress" || a.status === "completed" },
-    { label: "Scan at the treatment plant to hand over", done: a.status === "completed" },
+    { label: "Record arrival at the treatment plant", done: a.status === "completed" },
   ];
-  const open = a.status !== "completed" && a.status !== "cancelled";
+  const open = a.status !== "completed" && a.status !== "cancelled" && a.status !== "declined";
 
   return (
     <>
@@ -167,10 +165,14 @@ export default function AssignmentDetail() {
           {a.isMine && (a.status === "assigned" || a.status === "accepted") && <Button variant="secondary" onClick={() => setReasonFor("decline")}>Decline</Button>}
           {isAdmin && (a.status === "assigned" || a.status === "accepted") && <Button variant="secondary" onClick={() => setReassign(true)}>Change transporter</Button>}
           {isAdmin && open && <Button variant="danger" onClick={() => setReasonFor("cancel")}>Cancel job</Button>}
-          {open && <Button variant="ghost" onClick={() => setIncident(true)} icon={<AlertOctagon className="size-4" />}>Report incident</Button>}
         </div>
       </header>
       {act.error && <div className="mb-4"><FormError error={act.error} /></div>}
+      {a.status === "declined" && (
+        <div className="mb-4 rounded-[14px] border border-danger/30 bg-danger-soft/40 px-4 py-3 text-sm" role="status" data-testid="declined-banner">
+          <strong>Declined by {a.transporter.fullName}</strong>{a.declinedAt ? ` on ${fmtDateTime(a.declinedAt)}` : ""}{a.cancelReason ? `: “${a.cancelReason}”` : ""}. This collection is no longer waiting for acceptance; the hospital can request it again.
+        </div>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
         <div className="flex flex-col gap-5">
@@ -191,7 +193,7 @@ export default function AssignmentDetail() {
               {a.batches.map((b) => {
                 const target: ActionTarget = { id: b.id, trackingCode: b.trackingCode, quantity: b.quantity, unit: b.unit };
                 const canPickup = a.isMine && a.status === "accepted" && b.status === "segregated";
-                const canHandover = (a.isMine || isAdmin) && a.status === "in_progress" && b.status === "in_transit";
+                const canHandover = a.isMine && a.status === "in_progress" && b.status === "in_transit";
                 return (
                   <li key={b.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center">
                     <div className="min-w-0 flex-1">
@@ -207,16 +209,16 @@ export default function AssignmentDetail() {
                     </div>
                     <div className="flex gap-2">
                       {canPickup && <Button onClick={() => setDialog({ action: "pickup", target })} icon={<ScanLine className="size-4" />}>Scan pickup</Button>}
-                      {canHandover && <Button onClick={() => setDialog({ action: "handover", target })} icon={<ScanLine className="size-4" />}>Scan handover</Button>}
-                      {me.features.demoOrg && (canPickup || canHandover) && (
+                      {canHandover && <Button onClick={() => setDialog({ action: "handover", target })} icon={<Truck className="size-4" />}>Mark arrived at treatment plant</Button>}
+                      {me.features.demoOrg && canPickup && (
                         <Button
                           variant="secondary"
-                          onClick={() => simScan.mutate({ batchId: b.id, action: canPickup ? "pickup" : "handover" })}
+                          onClick={() => simScan.mutate({ batchId: b.id, action: "pickup" })}
                           loading={simScan.isPending && simScan.variables?.batchId === b.id}
                           icon={<FlaskConical className="size-4" />}
-                          title="Demo only: uses this batch's real QR label without a camera. Recorded as a simulated scan."
+                          title="Uses this batch's real QR label without a camera. Recorded as a simulated scan, not a physical one."
                         >
-                          Simulate QR scan (demo)
+                          Simulate QR scan
                         </Button>
                       )}
                       {isAdmin && b.status === "segregated" && (a.status === "assigned" || a.status === "accepted") && a.batches.length > 1 && (
@@ -276,8 +278,8 @@ export default function AssignmentDetail() {
             )}
           </Panel>
           {isAdmin && me.features.demoMode && open && (
-            <Panel title="Demo mode">
-              <p className="text-sm text-ink-2">Generate positions moving toward the destination, stored and displayed as <strong>simulated</strong>. Use only for demonstrations without a phone on the road.</p>
+            <Panel title="Trip simulation">
+              <p className="text-sm text-ink-2">Generates positions moving toward the destination, stored and shown as <strong>simulated</strong>.</p>
               <div className="mt-3 flex gap-2">
                 <Button variant="secondary" onClick={() => sim.mutate(true)} loading={sim.isPending} icon={<FlaskConical className="size-4" />}>Run simulated trip</Button>
                 <Button variant="ghost" onClick={() => sim.mutate(false)}>Stop</Button>
@@ -289,7 +291,6 @@ export default function AssignmentDetail() {
       </div>
 
       {dialog && <ActionDialog open action={dialog.action} target={dialog.target} onOpenChange={(o) => !o && setDialog(null)} onDone={refresh} />}
-      {incident && <IncidentDialog open onOpenChange={setIncident} assignmentId={a.id} context={`Job ${a.reference}`} />}
       <Modal open={!!reasonFor} onOpenChange={(o) => !o && setReasonFor(null)} title={reasonFor === "decline" ? "Decline this job" : "Cancel this job"} description="The batches go back to the facility's queue.">
         <form onSubmit={(e) => { e.preventDefault(); act.mutate({ action: reasonFor!, reason }); }} className="flex flex-col gap-4">
           <Field label="Reason" htmlFor="rr" required><Textarea id="rr" value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
@@ -305,7 +306,7 @@ export default function AssignmentDetail() {
           <Field label="Transporter" htmlFor="nt">
             <Select id="nt" value={newTransporter} onChange={(e) => setNewTransporter(e.target.value)}>
               <option value="">Choose…</option>
-              {transporters.data?.filter((t) => t.status === "active" && t.userId !== a.transporterUserId).map((t) => <option key={t.userId} value={t.userId}>{t.fullName}</option>)}
+              {transporters.data?.items.filter((t) => t.userId !== a.transporterUserId).map((t) => <option key={t.userId} value={t.userId}>{t.fullName}{t.vehicleReg ? ` · ${t.vehicleReg}` : ""}</option>)}
             </Select>
           </Field>
           <FormError error={reassignM.error} />

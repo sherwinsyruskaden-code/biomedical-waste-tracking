@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { BadgeCheck, Factory, FileSpreadsheet, Hospital, MapPinned, QrCode, ShieldCheck, Truck, UserCog } from "lucide-react";
+import { BadgeCheck, Factory, FileSpreadsheet, Hospital, MapPinned, QrCode, Truck, UserCog } from "lucide-react";
 import { motion, useMotionValue, useReducedMotion, useSpring, useTransform } from "motion/react";
 import { useState } from "react";
 import { Link } from "react-router";
@@ -12,8 +12,8 @@ const stages = [
   { key: "segregated", title: "Segregated", who: "Hospital staff", records: "Someone confirms the bag colour matches the waste, then requests collection to the treatment plant." },
   { key: "collected", title: "Collected", who: "Transporter", records: "The transporter accepts the request and scans at pickup. Custody moves from the hospital to the named driver." },
   { key: "in_transit", title: "In transit", who: "Transporter", records: "Phone GPS shares the vehicle's position, accuracy and time of every fix." },
-  { key: "delivered", title: "Delivered", who: "Transporter", records: "Containers are scanned again at the gate and handed over to the plant." },
-  { key: "received", title: "Received", who: "Plant staff", records: "Weight and condition are checked. Mismatches open an incident automatically." },
+  { key: "delivered", title: "Arrived", who: "Transporter", records: "The transporter records arrival at the plant. The batch now shows Arrived — awaiting receipt." },
+  { key: "received", title: "Received", who: "Plant staff", records: "Plant staff scan the batch's QR, confirm receipt, and record the weight and condition of what arrived." },
   { key: "disposed", title: "Disposed", who: "Plant staff", records: "Treatment method, quantity and the plant's own log reference close the record." },
 ];
 
@@ -109,14 +109,14 @@ function Tilt({ children }: { children: React.ReactNode }) {
 export default function Landing() {
   const reduceMotion = useReducedMotion();
   const { data: me } = useMe();
-  const signedIn = !!me?.membership || !!me?.user.isPlatformAdmin;
+  const signedIn = !!me?.membership;
   return (
     <div className="min-h-dvh bg-paper">
       <header className="mx-auto flex max-w-[1200px] items-center justify-between px-5 py-5 md:px-8">
         <Logo />
         <nav className="flex items-center gap-2">
           {signedIn && (
-            <Link to={me?.membership ? "/dashboard" : "/platform"} className="rounded-[10px] border border-emerald-600 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50">
+            <Link to="/dashboard" className="rounded-[10px] border border-emerald-600 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50">
               Open dashboard
             </Link>
           )}
@@ -149,7 +149,7 @@ export default function Landing() {
           {signedIn && (
             <p className="mt-5 text-[14.5px] text-ink-2" data-testid="signed-in-note">
               You're signed in as <strong>{me?.user.fullName}</strong>.{" "}
-              <Link to={me?.membership ? "/dashboard" : "/platform"} className="font-semibold text-emerald-700 underline decoration-emerald-300 underline-offset-4 hover:decoration-emerald-700">Open your dashboard</Link>
+              <Link to="/dashboard" className="font-semibold text-emerald-700 underline decoration-emerald-300 underline-offset-4 hover:decoration-emerald-700">Open your dashboard</Link>
             </p>
           )}
         </motion.div>
@@ -180,16 +180,15 @@ export default function Landing() {
 
       <section className="mx-auto max-w-[1200px] px-5 py-16 md:px-8">
         <h2 className="max-w-[24ch] text-[32px] font-extrabold md:text-[40px]">Each role sees its own facility. Nobody gets more access than their job needs.</h2>
-        <div className="mt-10 grid gap-px overflow-hidden rounded-[20px] border border-line bg-line md:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-10 grid grid-cols-1 gap-px overflow-hidden rounded-[20px] border border-line bg-line md:grid-cols-2 lg:grid-cols-6" data-testid="role-cards">
           {[
             { icon: <Hospital />, role: "Hospital staff", body: "Register and label waste at their own hospital, confirm segregation and request collection. They never see another hospital's batches." },
-            { icon: <Truck />, role: "Transporter", body: "See only the collections assigned to them — origin hospital and destination plant — scan at pickup and handover, and share location while driving." },
-            { icon: <Factory />, role: "Treatment-plant staff", body: "See waste heading to their plant, confirm receipt and custody, and record treatment or disposal." },
-            { icon: <UserCog />, role: "Organization admin", body: "Manages their organization's facilities, team, waste categories and settings, and sees its operations end to end." },
-            { icon: <ShieldCheck />, role: "Platform admin", body: "Reviews new organization registrations and approves or rejects them. A separate role from any organization's admin." },
-            { icon: <BadgeCheck />, role: "Approval first", body: "New organizations stay pending until approved, so only reviewed hospitals, plants and transport operators can operate." },
-          ].map((r) => (
-            <div key={r.role} className="bg-paper p-7">
+            { icon: <Truck />, role: "Transporter", body: "See only the collections assigned to them — origin hospital and destination plant — scan at pickup, record arrival, and share location while driving." },
+            { icon: <Factory />, role: "Treatment-plant staff", body: "See waste heading to their plant, scan the arriving batch, confirm receipt and custody, and record treatment or disposal." },
+            { icon: <UserCog />, role: "Main Admin", body: "Manages the organization's facilities, team, waste categories and settings, and sees its operations end to end. Approving new organizations needs a separate review permission." },
+            { icon: <BadgeCheck />, role: "Approval first", body: "New organizations stay pending until an authorised reviewer approves them, so only checked hospitals, plants and transport operators can operate." },
+          ].map((r, n) => (
+            <div key={r.role} className={`h-full bg-paper p-7 ${["lg:col-span-2", "lg:col-span-2", "lg:col-span-2", "lg:col-span-3", "md:col-span-2 lg:col-span-3"][n]}`}>
               <div className="flex items-center gap-3 text-emerald-700 [&_svg]:size-5">
                 {r.icon}
                 <h3 className="text-[19px] font-bold text-ink">{r.role}</h3>
@@ -202,8 +201,8 @@ export default function Landing() {
 
       <footer className="border-t border-line">
         <div className="mx-auto flex max-w-[1200px] flex-wrap items-center justify-between gap-3 px-5 py-6 text-[13px] text-ink-3 md:px-8">
-          <span>Biomedical Waste Tracking System — academic project</span>
-          <Link to="/terms" className="hover:text-ink">Terms & privacy</Link>
+          <span>Biomedical Waste Tracking System</span>
+          <Link to="/terms" className="hover:text-ink">Terms & Privacy</Link>
         </div>
       </footer>
     </div>

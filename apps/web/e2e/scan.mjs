@@ -54,14 +54,14 @@ await check("demo QR label shows on screen and is clearly marked as a demo", asy
   await d.page.goto("/demo-labels");
   const label = d.page.getByTestId("demo-label");
   await label.waitFor();
-  assert.match(await label.innerText(), /Demo label · synthetic data · not real waste/i);
+  assert.match(await label.innerText(), /Sample label · synthetic data · not real waste/i);
   code = (await label.locator("p.font-mono").innerText()).trim();
   assert.match(code, /^[A-Z0-9-]{6,}$/);
   await label.locator('[role="img"]').screenshot({ path: qrPng });
 });
 await check("it can be shown full screen and printed (print button present)", async () => {
   await d.page.getByRole("button", { name: "Show full screen" }).click();
-  await d.page.getByRole("dialog", { name: "Full-screen demo label" }).waitFor();
+  await d.page.getByRole("dialog", { name: "Full-screen sample label" }).waitFor();
   await d.page.getByRole("button", { name: "Close" }).click();
   assert.equal(await d.page.getByRole("button", { name: "Print this label" }).count(), 1);
 });
@@ -74,10 +74,16 @@ await check("scan screen offers QR only — no RFID, NFC or typed-code options",
   for (const bad of ["rfid", "nfc", "type it", "enter the code", "keyboard"]) assert.ok(!text.includes(bad), `scan page still mentions "${bad}"`);
   assert.equal(await d.page.getByRole("tab").count(), 0);
 });
-await check("no camera → useful error, photo fallback and demo shortcut (no broken screen)", async () => {
+await check("no camera → useful error, photo fallback and the batch-QR picker (no broken screen)", async () => {
   await d.page.getByRole("alert").filter({ hasText: /camera/i }).first().waitFor();
   await d.page.getByRole("button", { name: "Scan a photo or screenshot" }).waitFor();
-  await d.page.getByTestId("demo-shortcut").waitFor();
+  await d.page.getByTestId("batch-qr-picker").waitFor();
+});
+await check("the old sample-label instructions are gone; the new one is shown", async () => {
+  const text = await d.page.locator("main").innerText();
+  assert.ok(!text.includes("Presenting?"), "old Presenting? text is still there");
+  assert.ok(!text.includes("Open the sample QR labels"));
+  assert.ok(text.includes("Using your batch QR? Open the QR code from the batch you created, then scan it here."));
 });
 await check("uploading a screenshot of the label resolves to the right batch and shows next step", async () => {
   await d.page.getByTestId("scanner-image-input").setInputFiles(qrPng);
@@ -99,11 +105,12 @@ await check("a QR code that is not a BWTS label is rejected", async () => {
   await d.page.getByTestId("scanner-image-input").setInputFiles(other);
   await d.page.getByRole("alert").filter({ hasText: /not a BWTS|not registered|Label/i }).first().waitFor();
 });
-await check("demo shortcut recognises a demo label", async () => {
+await check("the batch-QR picker uses the chosen batch's own QR and marks the scan as simulated", async () => {
   await d.page.goto("/scan");
-  await d.page.getByTestId("demo-shortcut").waitFor();
-  await d.page.getByRole("button", { name: "Use this demo label" }).click();
+  await d.page.getByTestId("batch-qr-picker").waitFor();
+  await d.page.getByRole("button", { name: "Use this batch's QR" }).click();
   await d.page.getByText("Label recognised").waitFor();
+  await d.page.getByTestId("simulated-banner").waitFor();
 });
 
 console.log("Scan page (fake camera showing the label)");
@@ -120,24 +127,41 @@ await check("live camera decodes the on-screen demo label and shows the correct 
 });
 
 console.log("Transporter demo: simulated QR scans (no second device)");
-await check("transporter accepts a collection request and completes it with clearly-labelled simulated scans", async () => {
+await check("the transporter picks up with a clearly-labelled simulated scan and records arrival without any scan", async () => {
+  // Hospital B asks for a collection and chooses Ravi (the sample transporter), then Ravi works it.
+  const h = await open();
+  await h.page.goto("/login");
+  await h.page.locator('[data-demo="hospital"]').click();
+  await h.page.locator('[data-demo="staffB"]').click();
+  await h.page.waitForURL("**/dashboard", { timeout: 90000 });
+  const req = await h.page.evaluate(async () => {
+    const post = (u, d) => fetch(u, { method: "POST", headers: { "content-type": "application/json", "x-bwts-csrf": "1" }, body: JSON.stringify(d) });
+    const ready = (await (await fetch("/api/batches?status=segregated&pageSize=50")).json()).items.find((x) => !x.currentAssignmentId);
+    if (!ready) return { skip: true };
+    const offered = await (await fetch(`/api/batches/${ready.id}/transporters`)).json();
+    const ravi = offered.items.find((x) => x.fullName.startsWith("Ravi"));
+    if (!ravi) return { skip: true };
+    const r = await post(`/api/batches/${ready.id}/request-collection`, { transporterUserId: ravi.userId });
+    return { id: (await r.json()).id, batchId: ready.id, status: r.status };
+  });
+  if (req.skip) { const e = new Error("no ready batch / free Ravi left: run `npm run db:seed:reset` on a throwaway database"); e.skip = true; throw e; }
+  assert.equal(req.status, 201);
   const t = await open();
   await demoLogin(t.page, /Transporter/);
-  const waiting = await t.page.evaluate(async () => (await (await fetch("/api/assignments?status=assigned")).json()).items);
-  if (!waiting.length) { const e = new Error("no waiting demo collection left — run `npm run db:seed:reset` to recreate the demo"); e.skip = true; throw e; }
-  await t.page.goto(`/assignments/${waiting[0].id}`);
+  await t.page.goto(`/assignments/${req.id}`);
   await t.page.getByTestId("route").getByText(/Hospital B/).waitFor();
   await t.page.getByRole("button", { name: "Accept request" }).click();
-  await t.page.getByRole("button", { name: "Simulate QR scan (demo)" }).click();
-  await t.page.getByText(/Simulated QR scan of .* \(demo — no camera used\)/).first().waitFor();
+  await t.page.getByRole("button", { name: "Simulate QR scan" }).click();
+  await t.page.getByText(/Simulated QR scan of .* \((no camera used)\)/).first().waitFor();
   await t.page.getByRole("button", { name: "Start trip" }).click();
   await t.page.getByText("On the road").first().waitFor();
-  await t.page.getByRole("button", { name: "Simulate QR scan (demo)" }).click();
+  assert.equal(await t.page.getByRole("button", { name: "Simulate QR scan" }).count(), 0, "arrival offers a scan");
+  await t.page.getByRole("button", { name: "Mark arrived at treatment plant" }).click();
+  await t.page.getByRole("dialog").getByRole("button", { name: "Mark arrived at treatment plant" }).click();
   await t.page.getByText("Completed").first().waitFor();
-  const batchId = await t.page.evaluate(async (id) => (await (await fetch(`/api/assignments/${id}`)).json()).batches[0].id, waiting[0].id);
-  await t.page.goto(`/batches/${batchId}`);
-  await t.page.getByText("Simulated QR scan (demo)").nth(1).waitFor();
-  await t.page.getByText("Delivered").first().waitFor();
+  await t.page.goto(`/batches/${req.batchId}`);
+  await t.page.getByText("Simulated QR scan").first().waitFor();
+  await t.page.getByText("Arrived — awaiting receipt").first().waitFor();
 });
 
 await Promise.all(browsers.map((b) => b.close()));

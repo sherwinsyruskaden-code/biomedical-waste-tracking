@@ -3,8 +3,9 @@ import clsx from "clsx";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
-import { Button, ErrorState, Field, FormError, Input, LoadingBlock, PageHeader, Pagination, Panel, Select, fieldError } from "../components/ui";
+import { Button, ErrorState, Field, FormError, Input, LoadingBlock, PageHeader, Pagination, Panel, Select, fieldError, PasswordInput } from "../components/ui";
 import { useFacilities } from "../lib/queries";
+import { PASSWORD_HINT, passwordIssue } from "../lib/password";
 import { api, qs } from "../lib/api";
 import { fmtDateTime, humanize } from "../lib/format";
 import { useActor } from "../lib/session";
@@ -43,10 +44,10 @@ function Account() {
       </Panel>
       <Panel title="Change password">
         <form onSubmit={(e) => { e.preventDefault(); pw.mutate(); }} className="flex flex-col gap-4">
-          <Field label="Current password" htmlFor="cp" error={fieldError(pw.error, "currentPassword")}><Input id="cp" type="password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} /></Field>
-          <Field label="New password" htmlFor="np" hint="10+ characters, letters and numbers" error={fieldError(pw.error, "newPassword")}><Input id="np" type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} /></Field>
+          <Field label="Current password" htmlFor="cp" error={fieldError(pw.error, "currentPassword")}><PasswordInput id="cp" label="current password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} /></Field>
+          <Field label="New password" htmlFor="np" hint={PASSWORD_HINT} error={(next ? passwordIssue(next) : null) ?? fieldError(pw.error, "newPassword")}><PasswordInput id="np" label="new password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} /></Field>
           <FormError error={pw.error} />
-          <Button type="submit" loading={pw.isPending} disabled={!cur || !next} className="self-start">Change password</Button>
+          <Button type="submit" loading={pw.isPending} disabled={!cur || !!passwordIssue(next)} className="self-start">Change password</Button>
         </form>
       </Panel>
     </div>
@@ -75,12 +76,7 @@ function Organization({ org }: { org: Org }) {
 }
 
 const thresholdFields: { key: string; label: string; hint: string; unit: string }[] = [
-  { key: "collectionOverdueHours", label: "Collection overdue after", hint: "Alert when a batch hasn't been picked up this long after registration.", unit: "hours" },
-  { key: "transportDelayGraceMinutes", label: "Transport delayed after due time by", hint: "Grace period after a job's deliver-by time.", unit: "minutes" },
-  { key: "custodyMaxHours", label: "Missing handover after", hint: "Alert when a transporter has held waste this long without handing it over.", unit: "hours" },
-  { key: "receiptPendingMinutes", label: "Receipt pending after", hint: "Alert when delivered waste hasn't been received at the plant.", unit: "minutes" },
-  { key: "staleGpsMinutes", label: "GPS stale after", hint: "During an active trip, a position older than this is flagged.", unit: "minutes" },
-  { key: "weightTolerancePercent", label: "Weight tolerance", hint: "Difference between registered and received weight that opens an incident.", unit: "%" },
+  { key: "staleGpsMinutes", label: "GPS stale after", hint: "During an active trip, a position older than this is flagged on the map.", unit: "minutes" },
   { key: "locationRetentionDays", label: "Keep location history for", hint: "Older GPS points are deleted automatically.", unit: "days" },
 ];
 
@@ -89,10 +85,9 @@ function Thresholds({ org }: { org: Org }) {
   const [v, setV] = useState<Record<string, string>>({});
   useEffect(() => setV(Object.fromEntries(thresholdFields.map((f) => [f.key, String(org.settings[f.key] ?? "")]))), [org]);
   // Send the whole settings object so saving thresholds keeps the default treatment plant.
-  const m = useMutation({ mutationFn: () => api.put("/api/organization/settings", { ...org.settings, ...Object.fromEntries(Object.entries(v).map(([k, x]) => [k, Number(x)])) }), onSuccess: () => { toast.success("Thresholds saved"); qc.invalidateQueries({ queryKey: ["organization"] }); } });
+  const m = useMutation({ mutationFn: () => api.put("/api/organization/settings", { ...org.settings, ...Object.fromEntries(Object.entries(v).map(([k, x]) => [k, Number(x)])) }), onSuccess: () => { toast.success("Settings saved"); qc.invalidateQueries({ queryKey: ["organization"] }); } });
   return (
-    <Panel title="Alert thresholds & retention">
-      <p className="mb-5 max-w-[75ch] text-sm text-ink-2">The defaults are operational suggestions, not legal limits. Set them to match the rules and authorisation that apply to your organization. The background check runs every minute.</p>
+    <Panel title="Tracking & retention">
       <form onSubmit={(e) => { e.preventDefault(); m.mutate(); }} className="grid gap-4 md:grid-cols-2">
         {thresholdFields.map((f) => (
           <Field key={f.key} label={f.label} htmlFor={f.key} hint={f.hint} error={fieldError(m.error, f.key)}>
@@ -100,7 +95,7 @@ function Thresholds({ org }: { org: Org }) {
           </Field>
         ))}
         <div className="md:col-span-2"><FormError error={m.error} /></div>
-        <Button type="submit" loading={m.isPending} className="self-start">Save thresholds</Button>
+        <Button type="submit" loading={m.isPending} className="self-start">Save</Button>
       </form>
     </Panel>
   );
@@ -166,7 +161,7 @@ export default function Settings() {
   const { isAdmin } = useActor();
   const [params, setParams] = useSearchParams();
   const org = useQuery({ queryKey: ["organization"], queryFn: () => api.get<Org>("/api/organization") });
-  const tabs: [string, string][] = isAdmin ? [["account", "Account"], ["organization", "Organization"], ["thresholds", "Alerts & retention"], ["audit", "Audit log"]] : [["account", "Account"]];
+  const tabs: [string, string][] = isAdmin ? [["account", "Account"], ["organization", "Organization"], ["thresholds", "Tracking & retention"], ["audit", "Audit log"]] : [["account", "Account"]];
   const tab = tabs.find(([v]) => v === params.get("tab"))?.[0] ?? (isAdmin ? "organization" : "account");
   return (
     <>

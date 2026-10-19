@@ -28,8 +28,8 @@ export default function Labels() {
       <div className="no-print mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <Link to={`/batches/${id}`} className="mb-2 inline-flex items-center gap-1 text-sm font-semibold text-ink-2 hover:text-emerald-700"><ArrowLeft className="size-4" /> {d.trackingCode}</Link>
-          <h1 className="text-[30px] font-bold">{params.get("new") ? "Batch registered — print its labels" : "Container labels"}</h1>
-          <p className="mt-1 max-w-[70ch] text-ink-2">Attach one label to each container. The QR code holds only a random reference: scanning it shows details to signed-in members of your organization and nobody else.</p>
+          <h1 className="text-[30px] font-bold">Container labels</h1>
+          <p className="mt-1 text-ink-2">One label per container, each with this batch's own QR code.</p>
         </div>
         <div className="flex gap-2">
           <Link to={`/batches/${id}`} className="inline-flex h-10 items-center rounded-[10px] border border-line-2 bg-paper px-4 text-sm font-semibold hover:border-emerald-600">Go to batch</Link>
