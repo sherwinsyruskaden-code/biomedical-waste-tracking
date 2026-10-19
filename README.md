@@ -11,7 +11,7 @@ Track biomedical waste from the ward to final disposal: QR-labelled containers, 
 | API docs (OpenAPI) | http://localhost:4000/api/docs · raw: `/api/openapi.json` |
 | Health check | http://localhost:4000/api/health |
 
-More detail: [Architecture](docs/ARCHITECTURE.md) · [API](docs/API.md) · [Demo script](docs/DEMO.md) · [RFID/NFC hardware](docs/HARDWARE.md) · [Project report](FINAL_PROJECT_REPORT.md) · [Viva prep](VIVA_PREPARATION.md) · [Plan & checklist](IMPLEMENTATION_PLAN.md)
+More detail: [Architecture](docs/ARCHITECTURE.md) · [API](docs/API.md) · [Demo script](docs/DEMO.md) · [Hardware notes (RFID/NFC, backend only)](docs/HARDWARE.md) · [Project report](FINAL_PROJECT_REPORT.md) · [Viva prep](VIVA_PREPARATION.md) · [Plan & checklist](IMPLEMENTATION_PLAN.md)
 
 ---
 
@@ -49,18 +49,27 @@ CREATE DATABASE bwts_test OWNER bwts;
 
 ## 3. First use
 
-- **Your own organization:** click *Create organization* on the landing page. You become its **admin**. Follow the setup checklist on the dashboard: add a treatment facility, invite facility staff and a transporter, register the first batch.
-- **Invitations:** *Team → Invite* creates a one-time link (valid 7 days). Without SMTP configured, copy the link and send it yourself.
-- **Demo data:** after `npm run db:seed`, sign in as any of these (password `Demo-pass-2026`). Everything in the demo org is synthetic and labelled “(demo)”; its map positions are stored and shown as *simulated*.
+- **Create an account → Register an organization:** you become its **organization admin**. The organization starts **pending**: you can sign in and see its status, but nothing operational works until a **platform administrator** approves it. After approval, follow the dashboard checklist: add a treatment plant, invite hospital staff, plant staff and transporters, register the first batch.
+- **Joining an organization (hospital staff, treatment-plant staff, transporters):** you never pick your own role. Your organization admin invites you (*Team → Invite*, a one-time link valid 7 days, with the role and facility already set). Open the link, or use *Already have an invitation? Accept invitation* and paste it. Without SMTP configured, the admin copies the link and sends it themselves.
+- **Platform administrators** review registrations at `/platform`. The flag can only be granted on the server, never via sign-up or the API: create a normal account first, then run `npm run platform-admin -- reviewer@example.org` (`--revoke` to remove). Nobody can review an organization they belong to.
+- **The waste journey:** hospital staff register a batch (category, quantity, ward, containers; no destination), verify segregation, then click **Request collection**. The destination is the organization's authorised treatment plant (*Settings → Organization → Collection destination*, or automatic when there is exactly one). A transporter is assigned automatically (the active one with the fewest open jobs) and must **accept**, scan at pickup, start the trip, and scan at the plant. Plant staff then **confirm receipt** and **record treatment/disposal**. The batch keeps one tracking code throughout, and its custody history shows every step with timestamps.
+- **Who sees what:** hospital staff see only batches from their own hospital, plus the destination plant's name, address and contact. Plant staff see waste coming to their plant. Transporters see only their own collections, with origin and destination. Organization admins see their whole organization. These rules are enforced in the API queries, not just hidden in the UI.
+- **One-click demo** (`DEMO_MODE=true`): the landing page and the *Sign in* page list six demo roles: Hospital staff (Hospital A), Hospital staff (Hospital B), Transporter, Treatment-plant staff, Organization administrator and Platform administrator. Each one signs in with that account's real permissions. The first click on a fresh database creates the demo data automatically, and an outdated demo is recreated automatically. Demo sessions last 4 hours and end when the browser closes. **Set `DEMO_MODE=false` on any public server.**
+- **Demo data:** all of it is synthetic and labelled “(demo)”. Map positions are stored and shown as *simulated*. You can sign in normally with password `Demo-pass-2026`:
 
-| Email | Role |
-|---|---|
-| admin@demo.bwts.local | Admin |
-| staff@demo.bwts.local | Facility staff (hospital + clinic) |
-| plant@demo.bwts.local | Facility staff (treatment plant) |
-| driver@demo.bwts.local / driver2@demo.bwts.local | Transporter |
+| Email | Role | Facility |
+|---|---|---|
+| staff@demo.bwts.local | Hospital staff | Sunrise General Hospital (Hospital A) |
+| staff.b@demo.bwts.local | Hospital staff | Sunrise Women & Children Hospital (Hospital B) |
+| driver@demo.bwts.local / driver2@demo.bwts.local | Transporter | Their own collections only |
+| plant@demo.bwts.local | Treatment-plant staff | GreenCycle CBWTF |
+| admin@demo.bwts.local | Organization admin | Sunrise Health Network (all three facilities) |
+| platform@demo.bwts.local | Platform administrator | Review queue; no organization |
+| lakeview@demo.bwts.local / coastal@demo.bwts.local | Applicants | Two **pending** demo organizations to approve or reject |
 
-Recreate the demo org at any time with `npm run db:seed:reset`.
+In the demo organization, the transporter's collection page also has a **Simulate QR scan (demo)** button. It runs the real pickup/handover with that batch's real QR label, so no second device is needed. The custody history records it as a *simulated QR scan*, never as a physical scan.
+
+Recreate all demo data at any time with `npm run db:seed:reset`.
 
 ## 4. Environment variables (`.env`)
 
@@ -75,7 +84,7 @@ Recreate the demo org at any time with `npm run db:seed:reset`.
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Real email for password reset and invitations. Empty = **console-mail mode**: links are printed in the API terminal |
 | `VITE_MAP_TILE_URL`, `VITE_MAP_ATTRIBUTION` | Map tiles. Default OpenStreetMap (no key; follow the OSM tile usage policy) |
 | `ROUTING_URL` | Optional OSRM-compatible routing server for *planned* routes and ETA |
-| `DEMO_MODE` | `true` enables the admin-only, clearly labelled simulated-trip tool |
+| `DEMO_MODE` | `true` enables one-click demo sign-in and the admin-only, clearly labelled simulated-trip tool. **Set `false` on public servers** — anyone could otherwise open the demo organization |
 | `ALERT_JOB_INTERVAL_SECONDS` | How often alert thresholds are checked (default 60) |
 
 Never commit `.env` (it is git-ignored).
@@ -91,9 +100,12 @@ Never commit `.env` (it is git-ignored).
 | `npm run typecheck` | TypeScript checks for both apps |
 | `npm test` | API integration tests against `TEST_DATABASE_URL` (real PostgreSQL) |
 | `npm run test:e2e` | Browser end-to-end acceptance test (needs `npm run dev` running) |
+| `npm run test:e2e:landing` / `:scan` / `:dates` / `:motion` | Browser regression suites: landing/signup/session, QR scanning, date pickers and timezones, reduced-motion |
+| `node scripts/audit-api-calls.mjs` | Cross-checks every frontend API call against the backend routes (method + path) |
 | `npm run db:migrate` | Apply migrations |
 | `npm run db:generate --workspace apps/api` | Create a migration after editing `apps/api/src/db/schema.ts` |
-| `npm run db:seed` / `npm run db:seed:reset` | Create / recreate the demo organization |
+| `npm run db:seed` / `npm run db:seed:reset` | Create / recreate the demo data (demo organization, platform reviewer, pending applicants) |
+| `npm run platform-admin -- <email> [--revoke]` | Grant / revoke platform-administrator rights (server only) |
 
 **Production build on Windows:**
 
@@ -124,9 +136,13 @@ $env:NODE_ENV="production"; $env:APP_URL="http://localhost:4000"; npm start
 - The system tracks the **device carrying the waste**, not the bag itself.
 - Planned routes/ETA appear only if `ROUTING_URL` is set (e.g. a self-hosted OSRM). They are labelled as estimates, separate from recorded positions.
 
-## 8. RFID / NFC
+## 8. QR scanning (the only scanning method in the UI)
 
-QR scanning works out of the box. RFID/NFC tags can be attached to containers and are resolved through the same API. USB/Bluetooth readers in **keyboard-wedge mode** work in the *RFID reader* scan tab; Web NFC works on Android Chrome. **Neither was tested with physical hardware in this project.** See [docs/HARDWARE.md](docs/HARDWARE.md).
+Every container has a QR label (`APP_URL/s/<token>`; the token is random and carries no data). Open **Scan** and either point the camera at a label or upload a photo of one. After a scan the app shows the batch (tracking code, category, origin, containers, status) and the **next step permitted for your role**.
+
+- **Demo labels:** open **/demo-labels** (also linked from the Scan page) while signed into the demo org. Each synthetic batch has a large label marked *Demo label · synthetic data · not real waste*. Show it full screen on a second device, or press **Print**. Scanning it resolves to that batch.
+- **Camera unavailable** (no permission, no camera, or plain HTTP on a phone): the page explains why and offers the image-upload fallback and the demo-labels shortcut.
+- **RFID/NFC and manual code entry** were removed from the UI. The backend endpoints and tables are untouched (`docs/HARDWARE.md`), and were never tested with hardware.
 
 ## 9. Deploying
 
@@ -135,7 +151,10 @@ Single container: `docker compose --profile full up -d --build` runs PostgreSQL 
 ## 10. Known limitations
 
 - Not a regulatory compliance tool; default categories follow India's BMW Rules 2016 colour coding as an editable template only.
-- RFID/NFC hardware paths are implemented but untested on hardware.
+- RFID/NFC exist only as backend endpoints (no UI) and were never tested with hardware.
+- Dates: all day-based filters and scheduling rules use the organization's timezone. Pickups may be set from 10 minutes ago to 90 days ahead; deadlines at most 30 days after pickup; disposal cannot precede receipt or be in the future; nothing before 2000. The API rejects violations with field errors.
+- Demo mode is for demonstration: with `DEMO_MODE=true` anyone who can reach the server can open the demo org.
+- Verified only in the Linux build sandbox (Chromium automation). Not verified: your Windows machine, Docker, a real phone camera/GPS, SMTP.
 - GPS requires the transporter to keep the page open (browsers pause background location). A native app would be needed for background tracking.
 - Live updates run in one API process (in-memory event bus). Multiple API instances would need PostgreSQL LISTEN/NOTIFY (see Architecture).
 - `docker-compose.yml` / `Dockerfile` were not executed in the build environment (no Docker daemon there) — verify on your machine.

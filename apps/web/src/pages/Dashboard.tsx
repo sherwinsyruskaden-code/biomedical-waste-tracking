@@ -6,7 +6,8 @@ import { Bar, BarChart, CartesianGrid, ComposedChart, Line, ResponsiveContainer,
 import { Badge, CategoryChip, EmptyState, ErrorState, LoadingBlock, PageHeader, Panel, Skeleton } from "../components/ui";
 import { api } from "../lib/api";
 import { assignmentMeta, eventLabel, fmtDateTime, humanize, timeAgo } from "../lib/format";
-import { useActor } from "../lib/session";
+import { CountUp } from "../components/CountUp";
+import { useActor, useWorkplace } from "../lib/session";
 import type { AssignmentStatus, Facility, Member, Paged } from "../lib/types";
 
 interface DashboardData {
@@ -104,7 +105,7 @@ function Pipeline({ k }: { k: DashboardData["kpis"] }) {
                 {s.label}
               </span>
               <span>
-                <span className={clsx("tabular block font-display text-[44px] font-extrabold leading-none tracking-tight", s.done ? "text-lime" : "text-ink")}>{s.value}</span>
+                <span className={clsx("tabular block font-display text-[44px] font-extrabold leading-none tracking-tight", s.done ? "text-lime" : "text-ink")}><CountUp value={s.value} /></span>
                 <span className={clsx("mt-1 block text-[12px]", s.done ? "text-white/60" : "text-ink-3")}>{s.hint}</span>
               </span>
             </Link>
@@ -126,26 +127,26 @@ function TransporterHome() {
   const { me } = useActor();
   return (
     <>
-      <PageHeader title={`Hello, ${me.user.fullName.split(" ")[0]}`} description="Your active transport jobs. Open a job to accept it, scan pickups and share your location." />
+      <PageHeader title={`Hello, ${me.user.fullName.split(" ")[0]}`} description="Your active collections. Open one to accept it, scan at pickup and handover, and share your location." />
       {jobs.isLoading ? (
         <LoadingBlock />
       ) : jobs.isError ? (
         <ErrorState error={jobs.error} onRetry={() => jobs.refetch()} />
       ) : jobs.data!.items.length === 0 ? (
         <Panel>
-          <EmptyState icon={<Truck />} title="No active jobs">When an admin assigns you a collection it appears here and you'll get a notification.</EmptyState>
+          <EmptyState icon={<Truck />} title="No active collections">When a hospital requests a collection from you it appears here and you'll get a notification.</EmptyState>
         </Panel>
       ) : (
         <div className="grid gap-3">
           {jobs.data!.items.map((j) => (
-            <Link key={j.id} to={`/assignments/${j.id}`} className="flex flex-col gap-3 rounded-[16px] border border-line bg-paper p-5 hover:border-emerald-500 sm:flex-row sm:items-center">
+            <Link key={j.id} to={`/assignments/${j.id}`} className="lift flex flex-col gap-3 rounded-[16px] border border-line bg-paper p-5 hover:border-emerald-500 sm:flex-row sm:items-center">
               <div className="flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-display text-lg font-bold">{j.reference}</span>
                   <Badge tone={assignmentMeta[j.status].tone}>{assignmentMeta[j.status].label}</Badge>
                   {j.trackingActive && <Badge tone="lime"><Radio className="size-3" /> Sharing location</Badge>}
                 </div>
-                <p className="mt-1 text-ink-2">{j.originName} to {j.destinationName} · {j.batchCount} batch{j.batchCount === 1 ? "" : "es"}</p>
+                <p className="mt-1 text-ink-2">Origin: <strong className="text-ink">{j.originName}</strong> → Destination: <strong className="text-ink">{j.destinationName}</strong> · {j.batchCount} batch{j.batchCount === 1 ? "" : "es"}</p>
               </div>
               <div className="text-sm text-ink-2">
                 Due <span className="font-semibold text-ink">{fmtDateTime(j.dueBy)}</span>
@@ -160,20 +161,22 @@ function TransporterHome() {
 
 export default function Dashboard() {
   const { me, isAdmin, isTransporter } = useActor();
+  const { atHospital, atPlant, name: workplace } = useWorkplace();
   const q = useQuery({ queryKey: ["dashboard"], queryFn: () => api.get<DashboardData>("/api/dashboard"), refetchInterval: 60_000 });
   if (isTransporter) return <TransporterHome />;
   const d = q.data;
   return (
     <>
       <PageHeader
-        title={me.organization?.name ?? "Dashboard"}
+        title={!isAdmin && workplace ? workplace : me.organization?.name ?? "Dashboard"}
         description={d ? `Live from your records — refreshed ${timeAgo(d.generatedAt)}.` : "Loading the latest figures…"}
         actions={
           <>
-            <Link to="/tracking" className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-line-2 bg-paper px-4 text-sm font-semibold hover:border-emerald-600"><MapPinned className="size-4" /> Live map</Link>
-            <Link to="/batches/new" className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700">
+            {(isAdmin || atPlant) && <Link to="/tracking" className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-line-2 bg-paper px-4 text-sm font-semibold hover:border-emerald-600"><MapPinned className="size-4" /> Live map</Link>}
+            {atPlant && !isAdmin && <Link to="/receiving" className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700">Incoming waste</Link>}
+            {(isAdmin || atHospital) && <Link to="/batches/new" className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700">
               <Plus className="size-4" /> Register batch
-            </Link>
+            </Link>}
           </>
         }
       />
@@ -244,9 +247,9 @@ export default function Dashboard() {
                 </ul>
               )}
               <div className="mt-4 grid grid-cols-3 gap-2 rounded-[12px] bg-mist p-3 text-center">
-                <div><p className="tabular font-display text-2xl font-bold">{d.kpis.activeAssignments}</p><p className="text-[12px] text-ink-3">active jobs</p></div>
-                <div><p className="tabular font-display text-2xl font-bold text-signal-deep">{d.kpis.trackingNow}</p><p className="text-[12px] text-ink-3">sharing GPS</p></div>
-                <div><p className={clsx("tabular font-display text-2xl font-bold", d.kpis.overdueAssignments ? "text-danger" : "")}>{d.kpis.overdueAssignments}</p><p className="text-[12px] text-ink-3">past due</p></div>
+                <div><p className="tabular font-display text-2xl font-bold"><CountUp value={d.kpis.activeAssignments} /></p><p className="text-[12px] text-ink-3">active jobs</p></div>
+                <div><p className="tabular font-display text-2xl font-bold text-signal-deep"><CountUp value={d.kpis.trackingNow} /></p><p className="text-[12px] text-ink-3">sharing GPS</p></div>
+                <div><p className={clsx("tabular font-display text-2xl font-bold", d.kpis.overdueAssignments ? "text-danger" : "")}><CountUp value={d.kpis.overdueAssignments} /></p><p className="text-[12px] text-ink-3">past due</p></div>
               </div>
             </Panel>
           </div>

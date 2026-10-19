@@ -11,7 +11,7 @@ Biomedical waste (soiled dressings, sharps, contaminated plastics, glassware) is
 | Register and identify batches and containers | Batches with human-readable tracking codes (`BW-YYMMDD-XXXXXX`), 1–50 containers each, one QR label per container |
 | Record categories and segregation | Configurable categories (template from India's BMW Rules 2016 colour coding), explicit segregation verification step |
 | Track collection, custody, transport, receipt, disposal | Seven-stage state machine, multi-batch transport jobs, scanned custody transfers, receipt with weight/condition checks, disposal with category-allowed methods |
-| QR + RFID/NFC identification | Working QR (camera + deep link); RFID keyboard-wedge and Web NFC paths and a tag registry sharing one resolver — **hardware-untested** |
+| QR identification | QR-only scanning in the UI (camera or image upload, deep link, printable demo labels). RFID/NFC remain as backend endpoints with no UI — **never tested with hardware** |
 | Real GPS tracking | Transporter's phone shares position during active jobs; live map with freshness, accuracy, stale flags and recorded path |
 | Dashboards, alerts, reports, audit | Live dashboard, threshold alerts with auto-resolve, in-app notifications, 7 reports as CSV/PDF, append-only audit log |
 | Real accounts & organizations | Signup, login, reset, invitations, multi-organization membership |
@@ -34,14 +34,14 @@ Key design decisions:
 - Database: 22 tables, 2 migrations (schema + integrity guards).
 - API: 57 documented endpoints + SSE stream; OpenAPI generated from validation schemas.
 - Frontend: 15+ screens, shared UI kit, scanner, GPS hook, map component.
-- Tests: 29 API integration tests; one 16-step browser acceptance test.
+- Tests: 60 API integration tests; a 16-step browser acceptance test plus landing, scan, date and motion browser suites.
 
 ## 5. Testing and verification
 
 | Check | Result |
 |---|---|
 | `npm run typecheck` (API + web) | Pass |
-| `npm test` — 29 integration tests on real PostgreSQL: registration, duplicates, validation, login/logout/session revocation, rate limiting, CSRF, password reset, org isolation (direct IDs, QR labels, reports, assignments), role enforcement, facility scoping, invitations (single use, existing accounts, switching orgs, signed-in-as-someone-else), full lifecycle, wrong-container scans, idempotent retries, duplicate handover/receipt-before-handover/disposal-before-receipt blocking, GPS validation/dedupe/ownership, auto-completion, rejection + incidents + reroute, alert job raise/dedupe/auto-resolve, RFID/NFC registration/collision/reassign, DB-level tamper protection, CSV/PDF export | 29/29 pass |
+| `npm test` — 60 integration tests on real PostgreSQL: registration, duplicates, validation, login/logout/session revocation, rate limiting, CSRF, password reset, org isolation (direct IDs, QR labels, reports, assignments), role enforcement, facility scoping, invitations (single use, existing accounts, switching orgs, signed-in-as-someone-else), full lifecycle, wrong-container scans, idempotent retries, duplicate handover/receipt-before-handover/disposal-before-receipt blocking, GPS validation/dedupe/ownership, auto-completion, rejection + incidents + reroute, alert job raise/dedupe/auto-resolve, RFID/NFC registration/collision/reassign, DB-level tamper protection, CSV/PDF export | 29/29 pass |
 | `npm run test:e2e` — headless Chromium drives the real UI through the whole journey (§6) | 16/16 steps pass against the dev server **and** against the production build |
 | Production build served by the API (`NODE_ENV=production`) | Pass |
 | Data survives API restart (counts identical before/after) | Pass |

@@ -30,7 +30,7 @@ export default function AcceptInvite() {
     return (
       <AuthLayout title="Invitation unavailable">
         <ErrorState error={info.error} />
-        <p className="mt-4 text-sm text-ink-2">Ask your administrator to send a new invitation. <Link to="/login" className="font-semibold text-emerald-700">Sign in</Link></p>
+        <p className="mt-4 text-sm text-ink-2">Ask your administrator to send a new invitation, or <Link to="/invite" className="font-semibold text-emerald-700">enter a different link</Link>. Already joined? <Link to="/login" className="font-semibold text-emerald-700">Sign in</Link></p>
       </AuthLayout>
     );
   const inv = info.data!;
@@ -60,6 +60,39 @@ export default function AcceptInvite() {
             <Button type="submit" size="lg" loading={m.isPending} disabled={!accept}>Accept invitation</Button>
           </>
         )}
+      </form>
+    </AuthLayout>
+  );
+}
+
+/** "Already have an invitation?" — paste the link or code from the invitation email. */
+export function EnterInvite() {
+  const navigate = useNavigate();
+  const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const token = value.trim().match(/(?:\/invite\/)?([A-Za-z0-9_-]{20,100})\/?$/)?.[1];
+    if (!token) return setError("Paste the whole invitation link from your email, or just the code at its end.");
+    navigate(`/invite/${token}`);
+  };
+  return (
+    <AuthLayout
+      title="Accept an invitation"
+      subtitle={<>Your organization admin invites hospital staff, treatment-plant staff and transporters. No invitation yet? <Link to="/signup" className="font-semibold text-emerald-700 hover:underline">Create an account</Link></>}
+      aside={
+        <>
+          <p className="font-display text-[30px] font-bold leading-tight">Your role comes from your organization.</p>
+          <p className="mt-3 max-w-[40ch] text-white/75">Admins choose your role and facility when they invite you, so nobody can give themselves more access than their job needs.</p>
+        </>
+      }
+    >
+      <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
+        <Field label="Invitation link or code" htmlFor="invite" error={error ?? undefined} hint="It looks like https://…/invite/AbC123… — opening the link from your email works too.">
+          <Input id="invite" value={value} onChange={(e) => { setValue(e.target.value); setError(null); }} autoFocus />
+        </Field>
+        <Button type="submit" size="lg" disabled={!value.trim()}>Continue</Button>
+        <p className="text-[13px] text-ink-3">Already accepted? <Link to="/login" className="font-semibold text-emerald-700 hover:underline">Sign in</Link></p>
       </form>
     </AuthLayout>
   );

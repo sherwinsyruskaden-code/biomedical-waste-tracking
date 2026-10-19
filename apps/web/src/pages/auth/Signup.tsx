@@ -1,6 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import clsx from "clsx";
+import { Building2, Factory, Hospital, MailOpen, Truck } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { FacilityFields, emptyFacility, facilityPayload } from "../../components/FacilityFields";
 import { Button, Checkbox, Field, FormError, Input, Select, fieldError } from "../../components/ui";
 import { api } from "../../lib/api";
@@ -16,7 +18,34 @@ export const orgTypes = [
   ["other", "Other"],
 ] as const;
 
+/** Staff, plant staff and transporters get their role from their organization's admin, by invitation. */
+function JoinByInvitation() {
+  return (
+    <div className="flex flex-col gap-5" data-testid="join-by-invitation">
+      <p className="text-ink-2">People who work for an organization that already uses BWTS are added by that organization's administrator, who chooses their role and facility:</p>
+      <ul className="flex flex-col gap-2.5 text-sm">
+        {[
+          [<Hospital key="h" className="size-4" />, "Hospital staff", "invited to their hospital"],
+          [<Factory key="f" className="size-4" />, "Treatment-plant staff", "invited to their approved treatment plant"],
+          [<Truck key="t" className="size-4" />, "Transporters", "invited by the organization that dispatches them"],
+        ].map(([icon, role, how]) => (
+          <li key={String(role)} className="flex items-center gap-3 rounded-[12px] bg-mist px-3.5 py-2.5">
+            <span className="text-emerald-700">{icon}</span>
+            <span><strong>{role}</strong> <span className="text-ink-2">— {how}</span></span>
+          </li>
+        ))}
+      </ul>
+      <Link to="/invite" className="inline-flex h-12 items-center justify-center gap-2 rounded-[12px] bg-emerald-600 px-6 font-semibold text-white hover:bg-emerald-700">
+        <MailOpen className="size-4" /> I have an invitation — accept it
+      </Link>
+      <p className="text-[13px] text-ink-3">No invitation yet? Ask your organization administrator to invite you (Team → Invite). Roles can't be chosen at sign-up, so nobody can give themselves extra access.</p>
+    </div>
+  );
+}
+
 export default function Signup() {
+  const [params, setParams] = useSearchParams();
+  const path = params.get("as") === "member" ? "member" : "organization";
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [fullName, setFullName] = useState("");
@@ -58,18 +87,39 @@ export default function Signup() {
 
   return (
     <AuthLayout
-      title="Create your organization"
+      title="Create an account"
       subtitle={<>Already registered? <Link to="/login" className="font-semibold text-emerald-700 hover:underline">Sign in</Link></>}
       aside={
-        <>
-          <p className="font-display text-[30px] font-bold leading-tight">You'll be the admin.</p>
-          <p className="mt-3 max-w-[40ch] text-white/75">After this you can add more facilities, invite facility staff and transporters, and register the first batch.</p>
-        </>
+        path === "organization" ? (
+          <>
+            <p className="font-display text-[30px] font-bold leading-tight">You'll be the organization admin.</p>
+            <p className="mt-3 max-w-[40ch] text-white/75">The platform team reviews new organizations. Once yours is approved you can add facilities, invite hospital staff, plant staff and transporters, and register the first batch.</p>
+          </>
+        ) : undefined
       }
     >
+      <div className="mb-7 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Account type">
+        {([
+          ["organization", <Building2 key="o" className="size-5" />, "Register an organization", "Hospital, clinic, treatment plant or transport operator"],
+          ["member", <MailOpen key="m" className="size-5" />, "Join my organization", "Hospital staff, plant staff or transporter"],
+        ] as const).map(([value, icon, title, sub]) => (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={path === value}
+            onClick={() => setParams(value === "member" ? { as: "member" } : {}, { replace: true })}
+            className={clsx("flex items-start gap-3 rounded-[14px] border-2 p-3.5 text-left transition-colors", path === value ? "border-emerald-600 bg-emerald-50/60" : "border-line hover:border-line-2")}
+          >
+            <span className="mt-0.5 text-emerald-700">{icon}</span>
+            <span><span className="block font-semibold">{title}</span><span className="block text-[12.5px] text-ink-3">{sub}</span></span>
+          </button>
+        ))}
+      </div>
+      {path === "member" ? <JoinByInvitation /> : (
       <form onSubmit={submit} className="flex flex-col gap-7" noValidate>
         <fieldset className="flex flex-col gap-4">
-          <legend className="mb-3 font-display text-[17px] font-bold">You</legend>
+          <legend className="mb-3 font-display text-[17px] font-bold">You (organization administrator)</legend>
           <Field label="Full name" htmlFor="name" error={fe("fullName")} required>
             <Input id="name" autoComplete="name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
           </Field>
@@ -116,9 +166,11 @@ export default function Signup() {
           />
           {localError && localError !== "Passwords do not match." && <FormError error={new Error(localError)} />}
           <FormError error={m.error} />
-          <Button type="submit" size="lg" loading={m.isPending}>Create organization</Button>
+          <Button type="submit" size="lg" loading={m.isPending}>Register organization</Button>
+          <p className="text-[13px] text-ink-3">Your organization stays <strong>pending</strong> until a platform administrator approves it. You can sign in meanwhile to check its status.</p>
         </div>
       </form>
+      )}
     </AuthLayout>
   );
 }

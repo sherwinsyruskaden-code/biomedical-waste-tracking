@@ -15,6 +15,13 @@
       "when": 1792335412268,
       "tag": "0001_integrity_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792335500000,
+      "tag": "0002_org_approval",
+      "breakpoints": true
     }
   ]
 }

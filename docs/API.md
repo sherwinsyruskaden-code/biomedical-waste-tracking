@@ -11,7 +11,11 @@ Interactive documentation is served by the API at **`/api/docs`** (OpenAPI 3.1, 
 - Lifecycle actions accept an `Idempotency-Key` header (8–100 chars `[A-Za-z0-9_-]`); repeating a request with the same key returns the original result with `replayed: true`.
 - Timestamps are ISO-8601 UTC. Lists are paginated with `page` and `pageSize` (max 100) and return `{ items, total, page, pageSize }`.
 
-## Endpoints (57)
+## Dates and times
+
+Day filters (`from`, `to` on batches and reports) are calendar days `YYYY-MM-DD` in the organization's timezone: `from` is inclusive, `to` runs to the end of that day, neither may be in the future, and `from` ≤ `to`. Scheduling: pickup from now−10 min to now+90 days; due time after pickup and ≤ 30 days later; reroute due time in the future, ≤ 30 days; disposal not before the accepted receipt and not more than 5 min ahead; no instant before year 2000. Violations return 400 with `fields: { <field>: message }`.
+
+## Endpoints (60)
 
 ### Auth
 
@@ -27,6 +31,9 @@ Interactive documentation is served by the API at **`/api/docs`** (OpenAPI 3.1, 
 | POST | `/api/auth/change-password` | Change own password (signs out other sessions) | signed-in user |
 | POST | `/api/auth/forgot-password` | Request a password-reset link (always returns ok) | public |
 | POST | `/api/auth/reset-password` | Set a new password using a reset token | public |
+
+| GET | `/api/auth/demo` | Whether one-click demo sign-in is enabled, and its accounts | public |
+| POST | `/api/auth/demo-login` | DEMO MODE ONLY: sign in to the synthetic demo organization as one of its demo users (`{ account: "admin"\|"staff"\|"plant"\|"driver" }`) | public |
 
 ### Organization
 
@@ -85,7 +92,7 @@ Interactive documentation is served by the API at **`/api/docs`** (OpenAPI 3.1, 
 | Method | Path | Purpose | Access |
 |---|---|---|---|
 | GET | `/api/batches/{batchId}/labels` | Printable QR labels (SVG) for every container in the batch | organization member |
-| POST | `/api/identify` | Resolve a scanned QR / RFID / NFC identifier to its container and batch | organization member |
+| POST | `/api/identify` | Resolve a scanned identifier (QR in the UI) to its container and batch, including category, origin, container count | organization member |
 | POST | `/api/containers/{containerId}/identifiers` | Register (or move) an RFID / NFC tag on a container | organization member (admin, facility_staff) |
 | DELETE | `/api/identifiers/{identifierId}` | Deactivate an RFID / NFC tag | organization member (admin, facility_staff) |
 
@@ -109,6 +116,7 @@ Interactive documentation is served by the API at **`/api/docs`** (OpenAPI 3.1, 
 | GET | `/api/tracking/live` | Latest reported position for every active assignment you may see | organization member |
 | GET | `/api/assignments/{assignmentId}/route` | Planned route from an OSRM-compatible routing service, if configured | organization member |
 | POST | `/api/demo/assignments/{assignmentId}/simulate` | DEMO MODE ONLY: generate clearly-labelled simulated positions toward the destination | organization member (admin) |
+| GET | `/api/demo/labels` | DEMO MODE + demo org only: demo batches visible to your role with their QR label and the next permitted actions | organization member |
 | GET | `/api/events/stream` | Server-sent events: location, notification and invalidate events |  |
 
 ### Incidents
@@ -165,3 +173,15 @@ Interactive documentation is served by the API at **`/api/docs`** (OpenAPI 3.1, 
 - `location` — `{ assignmentId, transporterUserId, originFacilityId, destinationFacilityId, point }`, sent only to users allowed to see that job;
 - `notification` — a new in-app notification for the current user;
 - `invalidate` — `{ kind }`, a content-free hint that batches/assignments/alerts changed.
+
+## Organization approval, collection requests and demo scans
+
+| Method & path | Access | Purpose |
+|---|---|---|
+| `GET /api/platform/organizations?status=pending\|approved\|rejected\|all` | platform administrator | Registration review queue: applicant, organization details, declared facilities |
+| `POST /api/platform/organizations/:id/approve` `{ note? }` | platform administrator | Approve a pending organization (not one you belong to) |
+| `POST /api/platform/organizations/:id/reject` `{ note }` | platform administrator | Reject with a reason; nothing is deleted |
+| `POST /api/batches/:id/request-collection` `{ notes? }` | origin-hospital staff, admin | Creates the transport assignment to the configured treatment plant and assigns a transporter, who must accept |
+| `POST /api/demo/batches/:id/simulate-scan` `{ action: "pickup" \| "handover" }` | transporter, admin, **demo organization only** | Runs the real lifecycle action with the batch's real QR label; recorded with `details.simulatedScan = true` |
+
+Members of a **pending** or **rejected** organization get `403` with code `organization_pending` / `organization_rejected` from every operational endpoint. `GET /api/facilities` returns `access: "managed" | "own" | "partner"`, and partner facilities only include name, type, address, contact and location.

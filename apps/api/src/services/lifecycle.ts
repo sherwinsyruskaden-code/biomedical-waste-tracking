@@ -10,7 +10,7 @@
  *  - writes an append-only custody event (and optional receipt / disposal record),
  *  - supports an Idempotency-Key so a retried request cannot double-apply.
  */
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type Tx } from "../db/client.js";
 import {
@@ -33,6 +33,7 @@ import {
   type BatchStatus,
 } from "../db/schema.js";
 import { audit } from "../lib/audit.js";
+import { assertDisposalTime, orgTimezone } from "../lib/dates.js";
 import { AppError, badRequest, invalidTransition, notFound } from "../lib/errors.js";
 import { publish } from "../lib/events.js";
 import type { Actor } from "../lib/http.js";
@@ -144,7 +145,7 @@ export const actions: Record<ActionName, ActionDef> = {
     from: ["segregated"],
     to: "collected",
     check: ({ batch, actor, assignment }) => {
-      if (!assignment) return "Assign this batch to a transporter before pickup.";
+      if (!assignment) return "Waiting for the hospital to request collection; the assigned transporter then confirms pickup.";
       if (!isAssignedTransporter(actor, assignment) && !atFacility(actor, batch.originFacilityId)) return "Only the assigned transporter or origin-facility staff can record pickup.";
       if (assignment.status === "assigned") return "The transporter must accept the assignment before pickup.";
       if (assignment.status !== "accepted") return `Pickup is not possible while the assignment is ${assignment.status.replace("_", " ")}.`;
@@ -233,6 +234,8 @@ export async function performAction(
   name: ActionName,
   rawBody: unknown,
   idempotencyKey?: string,
+  /** Demo mode: the QR token was supplied by the server, not read by a camera. Recorded on the event. */
+  opts: { simulatedScan?: boolean } = {},
 ): Promise<PerformResult> {
   const parsed = actionBodies[name].safeParse(rawBody ?? {});
   if (!parsed.success) {
@@ -275,6 +278,7 @@ export async function performAction(
         longitude: body.longitude ?? null,
         assignmentId: batch.currentAssignmentId,
       };
+      if (opts.simulatedScan) event.details = { simulatedScan: true };
       let eventType: (typeof custodyEvents.$inferInsert)["eventType"];
       const afterCommit: (() => Promise<void>)[] = [];
 
@@ -400,7 +404,10 @@ export async function performAction(
         }
         case "dispose": {
           const b = body as unknown as z.infer<typeof actionBodies.dispose>;
-          if (b.disposedAt && b.disposedAt.getTime() > now.getTime() + 5 * 60_000) throw badRequest("Disposal time cannot be in the future.");
+          if (b.disposedAt) {
+            const [rc] = await tx.select({ at: receiptRecords.receivedAt }).from(receiptRecords).where(and(eq(receiptRecords.batchId, batch.id), eq(receiptRecords.accepted, true))).orderBy(desc(receiptRecords.receivedAt)).limit(1);
+            assertDisposalTime(b.disposedAt, rc?.at ?? null, await orgTimezone(actor.orgId), now.getTime());
+          }
           const [dest] = await tx.select().from(facilities).where(eq(facilities.id, batch.destinationFacilityId!));
           if (!dest?.canReceive) throw invalidTransition("The receiving facility is not authorised for disposal in this organization's settings.");
           const [cat] = await tx.select({ allowed: wasteCategories.allowedDisposalMethods, name: wasteCategories.name }).from(wasteCategories).where(eq(wasteCategories.id, batch.categoryId));

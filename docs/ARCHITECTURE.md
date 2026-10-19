@@ -80,11 +80,11 @@ generated ─segregate─▶ segregated ─(assigned to a job)─▶ ─pickup�
 
 Assignments (`services/assignments.ts`) group one or more segregated batches from one origin to one receiving facility for one transporter: `assigned → accepted → in_progress → completed | cancelled`. Starting a trip requires every batch to be picked up; the job completes automatically when everything has been handed over, which also switches location sharing off.
 
-## Identification (QR / RFID / NFC)
+## Identification (QR in the UI; RFID/NFC backend only)
 
 - Each container gets a **QR identifier**: a 144-bit random token. The label encodes `APP_URL/s/<token>`, so a normal phone camera opens the app; the token reveals nothing on its own and resolves only for signed-in members of the owning organization.
 - `container_identifiers` stores QR, RFID (EPC) and NFC (UID) values with one shared resolver (`POST /api/identify`). Tags can be registered, reassigned (explicit confirmation) and deactivated; collisions are prevented by a unique index.
-- Scan sources in the browser all produce `{ method, value, source }`: camera QR, USB/Bluetooth keyboard-wedge RFID readers, Web NFC, manual entry. A fixed-reader gateway would call the same endpoint (see HARDWARE.md). The lifecycle never knows which hardware was used, only the recorded `scan_method`.
+- The browser UI offers QR only (camera, or an uploaded image; `source` is `camera` or `manual_entry` for uploads/demo links) and produces `{ method: "qr", value, source }`. RFID/NFC values are still accepted by the API but no UI sends them. A fixed-reader gateway would call the same endpoint (see HARDWARE.md). The lifecycle never knows which hardware was used, only the recorded `scan_method`.
 
 ## GPS tracking
 

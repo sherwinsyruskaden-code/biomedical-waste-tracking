@@ -20,6 +20,7 @@ import { router as idRouter } from "./routes/identification.js";
 import { router as asgRouter } from "./routes/assignments.js";
 import { router as opsRouter } from "./routes/ops.js";
 import { router as insightsRouter } from "./routes/insights.js";
+import { router as platformRouter } from "./routes/platform.js";
 
 export function createApp() {
   const app = express();
@@ -69,6 +70,11 @@ export function createApp() {
     next();
   });
 
+  // Who-am-I answers must never come from a browser or proxy cache: a cached "signed in" /me is exactly how a visitor could look logged in.
+  app.use("/api", (_req, res, next) => {
+    res.set("Cache-Control", "no-store");
+    next();
+  });
   app.use("/api", loadSession);
 
   app.get("/api/health", async (_req, res) => {
@@ -87,6 +93,7 @@ export function createApp() {
   app.use("/api", asgRouter);
   app.use("/api", opsRouter);
   app.use("/api", insightsRouter);
+  app.use("/api/platform", platformRouter);
 
   // API documentation (OpenAPI 3.1 generated from the same Zod schemas that validate requests)
   app.get("/api/openapi.json", (_req, res) => res.json(buildOpenApi()));
@@ -144,7 +151,7 @@ function buildOpenApi() {
     paths[p][r.method] = {
       summary: r.summary,
       tags: [r.tag],
-      description: `Access: ${r.access === "public" ? "public" : r.access === "user" ? "signed-in user" : `organization member${r.roles ? ` (${r.roles.join(", ")})` : ""}`}`,
+      description: `Access: ${r.access === "public" ? "public" : r.access === "user" ? "signed-in user" : r.access === "platform" ? "platform administrator" : `member of an approved organization${r.roles ? ` (${r.roles.join(", ")})` : ""}`}`,
       parameters: params,
       ...(r.body ? { requestBody: { required: true, content: { "application/json": { schema: toJson(r.body) } } } } : {}),
       responses: {

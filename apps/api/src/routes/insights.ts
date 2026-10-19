@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "../db/client.js";
 import { alerts, assignments, batchStatusEnum, incidents, organizations, wasteBatches } from "../db/schema.js";
 import { audit } from "../lib/audit.js";
+import { orgTimezone, resolveRange } from "../lib/dates.js";
 import { actorOf, HANDLED, route, zId, type Actor } from "../lib/http.js";
 import { visibilityFilter } from "../services/lifecycle.js";
 
@@ -120,8 +121,9 @@ type ReportType = (typeof reportTypes)[number];
 
 const reportQuery = z.object({
   type: z.enum(reportTypes),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
+  /** Calendar days (YYYY-MM-DD) in the organization's timezone; validated by resolveRange. */
+  from: z.string().trim().max(40).optional(),
+  to: z.string().trim().max(40).optional(),
   facilityId: zId.optional(),
   categoryId: zId.optional(),
   status: z.enum(batchStatusEnum.enumValues).optional(),
@@ -129,7 +131,7 @@ const reportQuery = z.object({
   disposal: z.enum(["disposed", "pending"]).optional(),
   format: z.enum(["json", "csv", "pdf"]).default("json"),
 });
-type ReportQuery = z.infer<typeof reportQuery>;
+type ReportQuery = Omit<z.infer<typeof reportQuery>, "from" | "to"> & { from?: Date; to?: Date };
 
 interface Column {
   key: string;
@@ -348,7 +350,9 @@ export function toCsv(columns: Column[], rows: Record<string, unknown>[]) {
 
 route(router, base, { method: "get", path: "/reports", summary: "Run a report (format=json|csv|pdf). Always scoped to your organization and permissions.", tag: "Reports", access: "member", roles: ["admin", "facility_staff"], query: reportQuery, produces: "application/json, text/csv, application/pdf" }, async (ctx) => {
   const a = actorOf(ctx);
-  const q = ctx.query;
+  const tz = await orgTimezone(a.orgId);
+  const { from: rawFrom, to: rawTo, ...rest } = ctx.query;
+  const q: ReportQuery = { ...rest, ...resolveRange({ from: rawFrom, to: rawTo }, tz) };
   const meta = reportMeta[q.type];
   const rows = await runReport(q, a);
   await audit({ organizationId: a.orgId, actorUserId: a.userId, action: "report.run", metadata: { type: q.type, format: q.format, rows: rows.length }, ip: a.ip });
@@ -373,6 +377,7 @@ function renderPdf(out: NodeJS.WritableStream, p: { title: string; orgName: stri
   const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 36, bufferPages: true, info: { Title: p.title, Producer: "BWTS" } });
   doc.pipe(out);
   const green = "#059669";
+  const fmtDay = (d: Date) => d.toLocaleDateString("en-GB", { timeZone: p.timezone, dateStyle: "medium" });
   const fmtDate = (d: unknown) => (d ? new Date(d as string).toLocaleString("en-GB", { timeZone: p.timezone, dateStyle: "medium", timeStyle: "short" }) : "");
   const header = () => {
     doc.rect(0, 0, doc.page.width, 6).fill(green);
@@ -380,7 +385,7 @@ function renderPdf(out: NodeJS.WritableStream, p: { title: string; orgName: stri
     doc.font("Helvetica").fontSize(9).fillColor("#475569").text(`${p.orgName}  ·  Generated ${fmtDate(new Date())} (${p.timezone})`, 36, 44);
   };
   header();
-  const filters = [p.q.from && `From ${fmtDate(p.q.from)}`, p.q.to && `To ${fmtDate(p.q.to)}`, p.q.status && `Status ${p.q.status}`, p.q.disposal && `Disposal ${p.q.disposal}`, p.q.facilityId && "Facility filter", p.q.categoryId && "Category filter", p.q.transporterUserId && "Transporter filter"].filter(Boolean);
+  const filters = [p.q.from && `From ${fmtDay(p.q.from)}`, p.q.to && `To ${fmtDay(p.q.to)}`, p.q.status && `Status ${p.q.status}`, p.q.disposal && `Disposal ${p.q.disposal}`, p.q.facilityId && "Facility filter", p.q.categoryId && "Category filter", p.q.transporterUserId && "Transporter filter"].filter(Boolean);
   doc.fontSize(9).fillColor("#475569").text(`Filters: ${filters.length ? filters.join(" · ") : "none"}   ·   Rows: ${p.rows.length}`, 36, 58);
   const totalW = p.columns.reduce((s, c) => s + (c.width ?? 80), 0);
   const scale = (doc.page.width - 72) / totalW;

@@ -4,7 +4,9 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api, newIdempotencyKey } from "../lib/api";
 import { disposalMethods, humanize } from "../lib/format";
+import { isoToWall, rerouteWindow, wallIssue, wallToIso } from "../lib/dates";
 import { useFacilities } from "../lib/queries";
+import { useOrgTimezone } from "../lib/session";
 import type { ActionInfo, BatchStatus } from "../lib/types";
 import { Scanner, type ScanResult } from "./Scanner";
 import { Button, Checkbox, Field, FormError, Input, Modal, Select, Textarea, fieldError } from "./ui";
@@ -65,7 +67,7 @@ function ScanStep({ scan, setScan, required }: { scan: ScanResult | null; setSca
       <p className="flex items-center gap-2 text-sm font-semibold text-ink-2">
         <ScanLine className="size-4" /> Scan any container in this batch{required ? "" : " (optional)"}
       </p>
-      <Scanner onResult={setScan} defaultMode="camera" />
+      <Scanner onResult={setScan} />
     </div>
   );
 }
@@ -87,7 +89,10 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone }: { a
   const [method, setMethod] = useState(allowed[0]);
   const [docRef, setDocRef] = useState("");
   const [dest, setDest] = useState("");
-  const [dueBy, setDueBy] = useState(() => new Date(Date.now() + 3 * 3600_000 - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16));
+  const tz = useOrgTimezone();
+  const [dueBy, setDueBy] = useState(() => isoToWall(Date.now() + 3 * 3600_000, tz));
+  const rw = rerouteWindow();
+  const dueError = action === "reroute" ? wallIssue(dueBy, tz, rw.min, rw.max) : null;
 
   const m = useMutation({
     mutationFn: async () => {
@@ -104,7 +109,7 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone }: { a
       }
       if (action === "receive") body = { accepted, receivedQuantity: Number(qty), unit, condition, notes: notes || undefined, ...scanFields };
       if (action === "dispose") body = { method, treatedQuantity: qty ? Number(qty) : undefined, unit, documentRef: docRef || undefined, notes: notes || undefined };
-      if (action === "reroute") body = { destinationFacilityId: dest, dueBy: new Date(dueBy).toISOString(), notes: notes || undefined };
+      if (action === "reroute") body = { destinationFacilityId: dest, dueBy: wallToIso(dueBy, tz), notes: notes || undefined };
       return api.post<{ status: BatchStatus; replayed: boolean }>(`/api/batches/${target.id}/actions/${action}`, body, { "Idempotency-Key": key });
     },
     onSuccess: (r) => {
@@ -121,7 +126,7 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone }: { a
     (action !== "cancel" || notes.trim().length >= 3) &&
     (!needsScan || !!scan || (noScan && notes.trim().length > 0)) &&
     (action !== "receive" || (accepted || notes.trim().length > 0)) &&
-    (action !== "reroute" || !!dest);
+    (action !== "reroute" || (!!dest && !dueError));
 
   return (
     <Modal open={open} onOpenChange={onOpenChange} title={titles[action]} description={`Batch ${target.trackingCode}`} wide={needsScan || action === "receive"}>
@@ -202,8 +207,8 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone }: { a
                 {facilities.data?.filter((f) => f.canReceive && f.id !== target.destinationFacilityId).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
               </Select>
             </Field>
-            <Field label="Deliver by" htmlFor="rdue">
-              <Input id="rdue" type="datetime-local" value={dueBy} onChange={(e) => setDueBy(e.target.value)} />
+            <Field label="Deliver by" htmlFor="rdue" hint={`Organization time (${tz})`} error={dueError ?? fieldError(m.error, "dueBy")}>
+              <Input id="rdue" type="datetime-local" min={isoToWall(rw.min, tz)} max={isoToWall(rw.max, tz)} aria-invalid={!!dueError || undefined} value={dueBy} onChange={(e) => setDueBy(e.target.value)} />
             </Field>
           </div>
         )}

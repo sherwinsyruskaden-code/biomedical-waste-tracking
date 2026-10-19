@@ -7,7 +7,8 @@ import { Badge, Button, CategoryChip, EmptyState, ErrorState, Field, FormError, 
 import { api, qs } from "../lib/api";
 import { assignmentMeta, fmtDateTime, fmtQty } from "../lib/format";
 import { useFacilities, useMembers } from "../lib/queries";
-import { useActor } from "../lib/session";
+import { dueWindow, isoToWall, pickupWindow, wallIssue, wallToIso, wallToMs } from "../lib/dates";
+import { useActor, useOrgTimezone, useWorkplace } from "../lib/session";
 import type { AssignmentStatus, BatchListItem, Paged } from "../lib/types";
 
 interface Row {
@@ -24,7 +25,6 @@ interface Row {
   batchCount: number;
 }
 
-const localInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 
 export function CreateAssignment({ open, onOpenChange, presetOrigin }: { open: boolean; onOpenChange: (o: boolean) => void; presetOrigin?: string }) {
   const qc = useQueryClient();
@@ -35,8 +35,9 @@ export function CreateAssignment({ open, onOpenChange, presetOrigin }: { open: b
   const [dest, setDest] = useState("");
   const [transporter, setTransporter] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
-  const [pickup, setPickup] = useState(localInput(new Date(Date.now() + 30 * 60_000)));
-  const [due, setDue] = useState(localInput(new Date(Date.now() + 4 * 3600_000)));
+  const tz = useOrgTimezone();
+  const [pickup, setPickup] = useState(() => isoToWall(Date.now() + 30 * 60_000, tz));
+  const [due, setDue] = useState(() => isoToWall(Date.now() + 4 * 3600_000, tz));
   const [vehicle, setVehicle] = useState("");
   const [notes, setNotes] = useState("");
   const batches = useQuery({
@@ -46,7 +47,7 @@ export function CreateAssignment({ open, onOpenChange, presetOrigin }: { open: b
   });
   const candidates = (batches.data?.items ?? []).filter((b) => b.originFacilityId === origin);
   const m = useMutation({
-    mutationFn: () => api.post<{ id: string; reference: string }>("/api/assignments", { transporterUserId: transporter, originFacilityId: origin, destinationFacilityId: dest, batchIds: picked, scheduledPickupAt: new Date(pickup).toISOString(), dueBy: new Date(due).toISOString(), vehicleReg: vehicle || null, notes: notes || null }),
+    mutationFn: () => api.post<{ id: string; reference: string }>("/api/assignments", { transporterUserId: transporter, originFacilityId: origin, destinationFacilityId: dest, batchIds: picked, scheduledPickupAt: wallToIso(pickup, tz), dueBy: wallToIso(due, tz), vehicleReg: vehicle || null, notes: notes || null }),
     onSuccess: (a) => {
       toast.success(`Job ${a.reference} created`, { description: "The transporter has been notified." });
       for (const k of ["assignments", "batches", "dashboard", "tracking"]) qc.invalidateQueries({ queryKey: [k] });
@@ -54,6 +55,11 @@ export function CreateAssignment({ open, onOpenChange, presetOrigin }: { open: b
       navigate(`/assignments/${a.id}`);
     },
   });
+  const pw = pickupWindow();
+  const pickupError = wallIssue(pickup, tz, pw.min, pw.max);
+  const pickupMs = wallToMs(pickup, tz);
+  const dw = pickupMs === null ? null : dueWindow(pickupMs);
+  const dueError = !dw ? "Set a valid pickup time first." : wallIssue(due, tz, dw.min, dw.max);
   const activeTransporters = (transporters.data ?? []).filter((t) => t.status === "active");
   return (
     <Modal open={open} onOpenChange={onOpenChange} title="New transport job" description="Pick segregated batches waiting at one facility and send them to a receiving facility." wide>
@@ -109,11 +115,11 @@ export function CreateAssignment({ open, onOpenChange, presetOrigin }: { open: b
           <Field label="Vehicle registration" htmlFor="av">
             <Input id="av" value={vehicle} onChange={(e) => setVehicle(e.target.value)} placeholder="e.g. TN 09 AB 1234" />
           </Field>
-          <Field label="Pickup time" htmlFor="ap">
-            <Input id="ap" type="datetime-local" value={pickup} onChange={(e) => setPickup(e.target.value)} />
+          <Field label="Pickup time" htmlFor="ap" hint={`Organization time (${tz})`} error={pickupError ?? fieldError(m.error, "scheduledPickupAt")}>
+            <Input id="ap" type="datetime-local" min={isoToWall(pw.min, tz)} max={isoToWall(pw.max, tz)} aria-invalid={!!pickupError || undefined} value={pickup} onChange={(e) => setPickup(e.target.value)} />
           </Field>
-          <Field label="Deliver by" htmlFor="adue" error={fieldError(m.error, "dueBy")}>
-            <Input id="adue" type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} />
+          <Field label="Deliver by" htmlFor="adue" error={pickupError ? undefined : dueError ?? fieldError(m.error, "dueBy")}>
+            <Input id="adue" type="datetime-local" min={dw ? isoToWall(dw.min, tz) : undefined} max={dw ? isoToWall(dw.max, tz) : undefined} aria-invalid={!!dueError || undefined} value={due} onChange={(e) => setDue(e.target.value)} />
           </Field>
         </div>
         <Field label="Notes for the transporter" htmlFor="an">
@@ -122,7 +128,7 @@ export function CreateAssignment({ open, onOpenChange, presetOrigin }: { open: b
         <FormError error={m.error} />
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>Close</Button>
-          <Button type="submit" loading={m.isPending} disabled={!origin || !dest || !transporter || picked.length === 0}>Create job</Button>
+          <Button type="submit" loading={m.isPending} disabled={!origin || !dest || !transporter || picked.length === 0 || !!pickupError || !!dueError}>Create job</Button>
         </div>
       </form>
     </Modal>
@@ -131,6 +137,7 @@ export function CreateAssignment({ open, onOpenChange, presetOrigin }: { open: b
 
 export default function Assignments() {
   const { isAdmin, isTransporter } = useActor();
+  const { atPlant, atHospital } = useWorkplace();
   const [params, setParams] = useSearchParams();
   const [creating, setCreating] = useState(params.get("new") === "1");
   const status = params.get("status") ?? (isTransporter ? "assigned,accepted,in_progress" : "");
@@ -140,8 +147,8 @@ export default function Assignments() {
   return (
     <>
       <PageHeader
-        title={isTransporter ? "My jobs" : "Transport jobs"}
-        description={isTransporter ? "Accept a job, scan each container at pickup and drop-off, and share your location while you drive." : "Collections assigned to transporters, from pickup to handover."}
+        title={isTransporter ? "My collections" : isAdmin ? "Transport jobs" : atPlant && !atHospital ? "Incoming transfers" : "Collection requests"}
+        description={isTransporter ? "Accept a collection request, scan each batch at pickup and at the treatment plant, and share your location while you drive." : isAdmin ? "Every collection in your organization, from request to handover. Hospital staff request collections from a batch page." : atPlant && !atHospital ? "Waste on its way to your plant." : "Collections you requested from your hospital. Request one from a segregated batch's page."}
         actions={isAdmin && <Button onClick={() => setCreating(true)} icon={<Plus className="size-4" />}>New job</Button>}
       />
       <div className="mb-4 flex flex-wrap gap-1 rounded-[12px] bg-paper p-1 ring-1 ring-line w-fit" role="tablist">
@@ -156,7 +163,7 @@ export default function Assignments() {
           <div className="p-5"><ErrorState error={q.error} onRetry={() => q.refetch()} /></div>
         ) : q.data!.items.length === 0 ? (
           <EmptyState icon={<Truck />} title="No jobs here" action={isAdmin && <Button variant="secondary" onClick={() => setCreating(true)}>Create a job</Button>}>
-            {isTransporter ? "You'll be notified when an admin assigns you a collection." : "Create a job once batches have been segregated."}
+            {isTransporter ? "You'll be notified when a hospital requests a collection from you." : isAdmin ? "Hospital staff request collections from segregated batches; you can also dispatch a job here." : "Request collection from a segregated batch's page."}
           </EmptyState>
         ) : (
           <>
@@ -168,7 +175,11 @@ export default function Assignments() {
                       <span className="block font-mono font-semibold">{a.reference}</span>
                       <span className="text-[13px] text-ink-3">{a.batchCount} batch{a.batchCount === 1 ? "" : "es"}</span>
                     </span>
-                    <span className="text-sm text-ink-2">{a.originName} to <strong className="text-ink">{a.destinationName}</strong><span className="block text-[13px] text-ink-3">{a.transporterName}{a.vehicleReg ? ` · ${a.vehicleReg}` : ""}</span></span>
+                    <span className="text-sm text-ink-2">
+                      <span className="block">Origin: <strong className="text-ink">{a.originName}</strong></span>
+                      <span className="block">Destination: <strong className="text-ink">{a.destinationName}</strong></span>
+                      <span className="block text-[13px] text-ink-3">Transporter: {a.transporterName}{a.vehicleReg ? ` · ${a.vehicleReg}` : ""}</span>
+                    </span>
                     <span className="text-sm text-ink-2">Due {fmtDateTime(a.dueBy)}</span>
                     <span className="flex flex-wrap gap-1.5 md:justify-end">
                       {a.trackingActive && <Badge tone="lime"><Radio className="size-3" /> GPS</Badge>}

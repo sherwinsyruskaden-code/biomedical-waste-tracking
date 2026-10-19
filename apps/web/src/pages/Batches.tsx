@@ -5,7 +5,8 @@ import { CategoryChip, EmptyState, ErrorState, Input, LoadingBlock, PageHeader, 
 import { api, qs } from "../lib/api";
 import { fmtDateTime, fmtQty, timeAgo } from "../lib/format";
 import { useCategories, useFacilities } from "../lib/queries";
-import { useActor } from "../lib/session";
+import { MIN_DAY, dayIssue, todayIn } from "../lib/dates";
+import { useActor, useOrgTimezone } from "../lib/session";
 import type { BatchListItem, Paged } from "../lib/types";
 
 const statusPresets: [string, string][] = [
@@ -43,11 +44,18 @@ export default function Batches() {
     if (k !== "page") next.delete("page");
     setParams(next, { replace: true });
   };
+  const tz = useOrgTimezone();
+  const today = todayIn(tz);
+  const dateError =
+    (f.from && dayIssue(f.from, tz) && `From: ${dayIssue(f.from, tz)}`) ||
+    (f.to && dayIssue(f.to, tz) && `To: ${dayIssue(f.to, tz)}`) ||
+    (f.from && f.to && f.from > f.to ? "The From date must be on or before the To date." : null);
   const query = useQuery({
+    enabled: !dateError,
     queryKey: ["batches", f],
     queryFn: () =>
       api.get<Paged<BatchListItem>>(
-        `/api/batches${qs({ q: f.q, status: f.status, categoryId: f.categoryId, facilityId: f.facilityId, from: f.from ? new Date(f.from).toISOString() : "", to: f.to ? new Date(f.to + "T23:59:59").toISOString() : "", page: f.page, pageSize: 20 })}`,
+        `/api/batches${qs({ q: f.q, status: f.status, categoryId: f.categoryId, facilityId: f.facilityId, from: f.from, to: f.to, page: f.page, pageSize: 20 })}`,
       ),
     placeholderData: (prev) => prev,
   });
@@ -83,9 +91,10 @@ export default function Batches() {
           <option value="">All facilities</option>
           {facilities.data?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
         </Select>
-        <Input type="date" aria-label="Registered from" value={f.from} onChange={(e) => set("from", e.target.value)} />
-        <Input type="date" aria-label="Registered to" value={f.to} onChange={(e) => set("to", e.target.value)} />
+        <Input type="date" aria-label="Registered from" min={MIN_DAY} max={today} aria-invalid={!!dateError || undefined} value={f.from} onChange={(e) => set("from", e.target.value)} />
+        <Input type="date" aria-label="Registered to" min={MIN_DAY} max={today} aria-invalid={!!dateError || undefined} value={f.to} onChange={(e) => set("to", e.target.value)} />
       </div>
+      {dateError && <p className="-mt-2 mb-3 text-[13px] text-danger" role="alert">{dateError}</p>}
 
       <div className="overflow-hidden rounded-[16px] border border-line bg-paper">
         {query.isLoading ? (
@@ -109,7 +118,7 @@ export default function Batches() {
                     <th className="px-5 py-3 font-semibold">Tracking code</th>
                     <th className="px-3 py-3 font-semibold">Category</th>
                     <th className="px-3 py-3 text-right font-semibold">Quantity</th>
-                    <th className="px-3 py-3 font-semibold">Route</th>
+                    <th className="px-3 py-3 font-semibold">Origin → Destination</th>
                     <th className="px-3 py-3 font-semibold">Status</th>
                     <th className="px-5 py-3 text-right font-semibold">Registered</th>
                   </tr>
@@ -123,7 +132,7 @@ export default function Batches() {
                       </td>
                       <td className="px-3 py-3"><CategoryChip code={b.category.code} color={b.category.colorHex} compact /></td>
                       <td className="tabular px-3 py-3 text-right font-semibold">{fmtQty(b.quantity, b.unit)}</td>
-                      <td className="px-3 py-3 text-ink-2">{b.originName}<span className="block text-[12.5px] text-ink-3">to {b.destinationName ?? "not yet assigned"}</span></td>
+                      <td className="px-3 py-3 text-ink-2">{b.originName}<span className="block text-[12.5px] text-ink-3">{b.destinationName ? `→ ${b.destinationName}` : "Destination set on collection request"}</span></td>
                       <td className="px-3 py-3"><StatusBadge status={b.status} /><span className="block pt-1 text-[12px] text-ink-3">{timeAgo(b.statusChangedAt)}</span></td>
                       <td className="px-5 py-3 text-right text-ink-2">{fmtDateTime(b.createdAt)}</td>
                     </tr>

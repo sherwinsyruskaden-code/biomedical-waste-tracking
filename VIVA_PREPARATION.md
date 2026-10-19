@@ -55,11 +55,11 @@ BWTS tracks biomedical waste from the moment it is bagged on a ward until it is 
 
 ## RFID / NFC
 
-QR is the working, tested path. RFID/NFC tag IDs are stored in the same identifier table and resolved by the same endpoint; keyboard-wedge USB/Bluetooth readers and Android Web NFC are supported in the scanner UI. These were **not tested with hardware**. A fixed UHF gate reader would need a small gateway service and device API keys (designed, not built). See docs/HARDWARE.md.
+The UI is QR-only (I removed RFID/NFC/manual entry from the interface because I had no hardware to test). RFID/NFC identifiers can still be stored and resolved through the same backend endpoint, but that path is untested with hardware and has no screen.
 
 ## Testing
 
-29 API integration tests run against a real PostgreSQL test database (not mocks) and cover auth, isolation, lifecycle rules, GPS validation, alerts and exports. A browser end-to-end test drives the real UI through the full 16-step acceptance journey, including emulated geolocation, and passes against both the dev server and the production build. I also checked restart persistence and a backup/restore round trip.
+60 API integration tests run against a real PostgreSQL test database (not mocks) and cover auth, isolation, lifecycle rules, GPS validation, alerts and exports. A browser end-to-end test drives the real UI through the full 16-step acceptance journey, including emulated geolocation, and passes against both the dev server and the production build. I also checked restart persistence and a backup/restore round trip.
 
 ## Regulations
 

@@ -1,12 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AlertOctagon, ArrowLeft, Ban, MapPin, Pencil, Printer, Radio, ScanLine, Tag, Truck } from "lucide-react";
+import { AlertOctagon, ArrowLeft, Ban, FlaskConical, MapPin, Pencil, Printer, Radio, ScanLine, Send, Truck } from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { ActionDialog } from "../components/ActionDialog";
 import { IncidentDialog } from "../components/IncidentDialog";
-import { TagDialog } from "../components/TagDialog";
-import { Badge, Button, CategoryChip, ErrorState, LoadingBlock, Panel, StatusBadge } from "../components/ui";
+import { toast } from "sonner";
+import { Badge, Button, CategoryChip, ErrorState, Field, FormError, LoadingBlock, Modal, Panel, StatusBadge, Textarea } from "../components/ui";
 import { api } from "../lib/api";
 import { assignmentMeta, eventLabel, fmtDateTime, fmtQty, humanize, lifecycle, roleLabel, statusMeta } from "../lib/format";
 import { useActor } from "../lib/session";
@@ -82,7 +82,11 @@ function TimelineItem({ e, last }: { e: CustodyEvent; last: boolean }) {
           </p>
         )}
         <div className="mt-1.5 flex flex-wrap gap-1.5">
-          {e.scanMethod && <Badge tone={e.scanMethod === "manual" ? "warn" : "neutral"}>{e.scanMethod === "manual" ? "Recorded without scan" : `${e.scanMethod.toUpperCase()} scan`}</Badge>}
+          {e.scanMethod && (e.details?.simulatedScan ? (
+            <Badge tone="warn"><FlaskConical className="size-3" /> Simulated QR scan (demo)</Badge>
+          ) : (
+            <Badge tone={e.scanMethod === "manual" ? "warn" : "neutral"}>{e.scanMethod === "manual" ? "Recorded without scan" : `${e.scanMethod.toUpperCase()} scan`}</Badge>
+          ))}
           {e.latitude !== null && (
             <a href={`https://www.openstreetmap.org/?mlat=${e.latitude}&mlon=${e.longitude}#map=17/${e.latitude}/${e.longitude}`} target="_blank" rel="noreferrer">
               <Badge tone="signal"><MapPin className="size-3" /> Location attached</Badge>
@@ -104,13 +108,54 @@ function TimelineItem({ e, last }: { e: CustodyEvent; last: boolean }) {
   );
 }
 
+/** Hospital staff ask for collection; the destination is the organization's configured treatment plant. */
+function RequestCollection({ b }: { b: Detail }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [notes, setNotes] = useState("");
+  const m = useMutation({
+    mutationFn: () => api.post<{ reference: string }>(`/api/batches/${b.id}/request-collection`, { notes: notes || null }),
+    onSuccess: (a) => {
+      toast.success(`Collection requested (${a.reference})`, { description: "A transporter has been assigned and notified." });
+      setOpen(false);
+      for (const k of ["batch", "batches", "assignments", "dashboard"]) qc.invalidateQueries({ queryKey: [k] });
+    },
+  });
+  const r = b.collectionRequest!;
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-3 rounded-[14px] border border-emerald-200 bg-emerald-50/60 p-4" data-testid="request-collection">
+        <div className="min-w-0 flex-1 text-sm">
+          <p className="font-semibold text-ink">Ready to send for treatment?</p>
+          <p className="text-ink-2">Destination: <strong>{r.destination?.name ?? "not configured"}</strong>{r.reason ? <span className="block text-ink-3">{r.reason}</span> : null}</p>
+        </div>
+        <Button onClick={() => setOpen(true)} disabled={!r.enabled} icon={<Send className="size-4" />}>Request collection</Button>
+      </div>
+      <Modal open={open} onOpenChange={setOpen} title="Request collection" description={`${b.trackingCode} will be collected by a transporter and taken to ${r.destination?.name}.`}>
+        <form onSubmit={(e) => { e.preventDefault(); m.mutate(); }} className="flex flex-col gap-4">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-[12px] bg-mist p-3 text-sm">
+            <dt className="text-ink-3">Origin</dt><dd className="font-semibold">{b.origin.name}</dd>
+            <dt className="text-ink-3">Destination</dt><dd className="font-semibold">{r.destination?.name}</dd>
+            <dt className="text-ink-3">Transporter</dt><dd>Assigned automatically — they must accept</dd>
+          </dl>
+          <Field label="Note for the transporter (optional)" htmlFor="rcn"><Textarea id="rcn" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. Collect from the loading bay behind Block C" /></Field>
+          <FormError error={m.error} />
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button type="submit" loading={m.isPending} icon={<Send className="size-4" />}>Send request</Button>
+          </div>
+        </form>
+      </Modal>
+    </>
+  );
+}
+
 export default function BatchDetail() {
   const { id = "" } = useParams();
   const { isTransporter } = useActor();
   const q = useQuery({ queryKey: ["batch", id], queryFn: () => api.get<Detail>(`/api/batches/${id}`) });
   const [dialog, setDialog] = useState<ActionInfo["action"] | null>(null);
   const [incident, setIncident] = useState(false);
-  const [tagFor, setTagFor] = useState<{ id: string; label: string } | null>(null);
 
   if (q.isLoading) return <LoadingBlock rows={8} />;
   if (q.isError) return <ErrorState error={q.error} onRetry={() => q.refetch()} />;
@@ -148,6 +193,7 @@ export default function BatchDetail() {
         <div className="flex flex-col gap-5">
           <Panel>
             <CustodyRail b={b} />
+            {b.collectionRequest && <div className="mt-5"><RequestCollection b={b} /></div>}
             {(enabled.length > 0 || blocked.length > 0) && (
               <div className="mt-5 flex flex-col gap-3 border-t border-line pt-5">
                 {enabled.length > 0 && (
@@ -180,9 +226,11 @@ export default function BatchDetail() {
         <aside className="flex flex-col gap-5">
           <Panel title="Details">
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2.5 text-sm">
-              <dt className="text-ink-3">Held by</dt><dd className="font-semibold"><Custodian b={b} /></dd>
+              <dt className="text-ink-3">Status</dt><dd><StatusBadge status={b.status} /></dd>
               <dt className="text-ink-3">Origin</dt><dd>{b.origin.name}</dd>
-              <dt className="text-ink-3">Destination</dt><dd>{b.destination?.name ?? <span className="text-ink-3">Not set</span>}</dd>
+              <dt className="text-ink-3">Destination</dt><dd>{b.destination?.name ?? <span className="text-ink-3">Set when collection is requested</span>}</dd>
+              <dt className="text-ink-3">Transporter</dt><dd>{b.currentAssignment?.transporterName ?? b.assignmentHistory.at(-1)?.transporterName ?? <span className="text-ink-3">Not yet assigned</span>}</dd>
+              <dt className="text-ink-3">Held by</dt><dd className="font-semibold"><Custodian b={b} /></dd>
               <dt className="text-ink-3">Registered</dt><dd>{fmtDateTime(b.generatedAt)}</dd>
               <dt className="text-ink-3">By</dt><dd>{b.responsible.fullName}</dd>
               {b.collectionDueAt && !["disposed", "cancelled", "received", "delivered"].includes(b.status) && <><dt className="text-ink-3">Collect by</dt><dd className={clsx(new Date(b.collectionDueAt) < new Date() && ["generated", "segregated"].includes(b.status) && "font-semibold text-danger")}>{fmtDateTime(b.collectionDueAt)}</dd></>}
@@ -221,9 +269,6 @@ export default function BatchDetail() {
                       ))}
                     </p>
                   </div>
-                  {!isTransporter && !["disposed", "cancelled"].includes(b.status) && (
-                    <Button size="sm" variant="ghost" onClick={() => setTagFor({ id: c.id, label: c.label })} icon={<Tag className="size-3.5" />}>Tag</Button>
-                  )}
                 </li>
               ))}
             </ul>
@@ -272,7 +317,6 @@ export default function BatchDetail() {
 
       {dialog && <ActionDialog open action={dialog} target={b} onOpenChange={(o) => !o && setDialog(null)} />}
       {incident && <IncidentDialog open onOpenChange={setIncident} batchId={b.id} context={`Batch ${b.trackingCode}`} />}
-      {tagFor && <TagDialog open onOpenChange={(o) => !o && setTagFor(null)} containerId={tagFor.id} label={tagFor.label} />}
     </>
   );
 }

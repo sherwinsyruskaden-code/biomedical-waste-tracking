@@ -1,13 +1,15 @@
 import type { NextFunction, Request, Response } from "express";
 import { and, eq, gt } from "drizzle-orm";
 import { db, type Tx } from "../db/client.js";
-import { membershipFacilities, memberships, sessions, users } from "../db/schema.js";
+import { membershipFacilities, memberships, organizations, sessions, users } from "../db/schema.js";
 import { env } from "../env.js";
 import { randomToken, sha256 } from "./crypto.js";
 import type { AuthContext } from "./http.js";
 
 export const SESSION_COOKIE = "bwts_session";
 const ttlMs = () => env.SESSION_TTL_HOURS * 3600_000;
+/** Demo sign-ins are short-lived and vanish when the browser closes, so one demo click can't leave a browser "signed in" for days. */
+export const DEMO_SESSION_HOURS = 4;
 
 export async function createSession(
   res: Response,
@@ -15,7 +17,11 @@ export async function createSession(
   userId: string,
   activeOrganizationId: string | null,
   tx: Tx = db,
+  opts: { demo?: boolean } = {},
 ) {
+  // A new sign-in replaces whatever session this browser already had (no orphaned sessions, no stale identity).
+  if (req.auth) await tx.delete(sessions).where(eq(sessions.id, req.auth.sessionId));
+  const lifetime = opts.demo ? DEMO_SESSION_HOURS * 3600_000 : ttlMs();
   const token = randomToken(32);
   await tx.insert(sessions).values({
     id: sha256(token),
@@ -23,18 +29,19 @@ export async function createSession(
     activeOrganizationId,
     userAgent: req.get("user-agent")?.slice(0, 300) ?? null,
     ip: req.ip ?? null,
-    expiresAt: new Date(Date.now() + ttlMs()),
+    expiresAt: new Date(Date.now() + lifetime),
   });
-  setSessionCookie(res, token);
+  setSessionCookie(res, token, opts.demo ? "session" : lifetime);
 }
 
-export function setSessionCookie(res: Response, token: string) {
+/** `maxAge` in ms, or "session" for a cookie that ends when the browser closes. */
+export function setSessionCookie(res: Response, token: string, maxAge: number | "session" = ttlMs()) {
   res.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
     secure: env.COOKIE_SECURE,
     sameSite: "lax",
     path: "/",
-    maxAge: ttlMs(),
+    ...(maxAge === "session" ? {} : { maxAge }),
   });
 }
 
@@ -56,6 +63,7 @@ export async function loadSession(req: Request, res: Response, next: NextFunctio
         userId: users.id,
         email: users.email,
         fullName: users.fullName,
+        isPlatformAdmin: users.isPlatformAdmin,
       })
       .from(sessions)
       .innerJoin(users, eq(users.id, sessions.userId))
@@ -65,14 +73,15 @@ export async function loadSession(req: Request, res: Response, next: NextFunctio
       return next();
     }
     const auth: AuthContext = {
-      user: { id: row.userId, email: row.email, fullName: row.fullName },
+      user: { id: row.userId, email: row.email, fullName: row.fullName, isPlatformAdmin: row.isPlatformAdmin },
       sessionId: row.sessionId,
       membership: null,
     };
     if (row.activeOrg) {
       const [m] = await db
-        .select({ id: memberships.id, role: memberships.role, organizationId: memberships.organizationId })
+        .select({ id: memberships.id, role: memberships.role, organizationId: memberships.organizationId, orgStatus: organizations.status })
         .from(memberships)
+        .innerJoin(organizations, eq(organizations.id, memberships.organizationId))
         .where(
           and(
             eq(memberships.userId, row.userId),

@@ -1,13 +1,15 @@
 export type Role = "admin" | "facility_staff" | "transporter";
 export type BatchStatus = "generated" | "segregated" | "collected" | "in_transit" | "delivered" | "received" | "disposed" | "rejected" | "cancelled";
+export type OrgStatus = "pending" | "approved" | "rejected";
 export type AssignmentStatus = "assigned" | "accepted" | "in_progress" | "completed" | "cancelled";
 
 export interface Me {
-  user: { id: string; email: string; fullName: string; phone: string | null; createdAt: string };
-  membership: { id: string; organizationId: string; role: Role; facilityIds: string[] } | null;
-  organization: { id: string; name: string; type: string; timezone: string } | null;
-  memberships: { id: string; organizationId: string; organizationName: string; role: Role; status: string }[];
-  features: { demoMode: boolean };
+  user: { id: string; email: string; fullName: string; phone: string | null; isPlatformAdmin: boolean; createdAt: string };
+  membership: { id: string; organizationId: string; role: Role; facilityIds: string[]; orgStatus: OrgStatus } | null;
+  organization: { id: string; name: string; type: string; timezone: string; status: OrgStatus; submittedAt: string; reviewedAt: string | null; reviewNote: string | null } | null;
+  memberships: { id: string; organizationId: string; organizationName: string; organizationStatus: OrgStatus; role: Role; status: string }[];
+  /** demoOrg: signed into the synthetic demo organization (enables clearly-labelled demo tools). */
+  features: { demoMode: boolean; demoOrg: boolean };
 }
 
 export interface Facility {
@@ -23,6 +25,8 @@ export interface Facility {
   latitude: number | null;
   longitude: number | null;
   active: boolean;
+  /** managed = admin of the organization; own = your workplace; partner = other end of a transfer (outline only). */
+  access: "managed" | "own" | "partner";
 }
 
 export interface Category {
@@ -145,6 +149,8 @@ export interface BatchDetail extends Omit<BatchListItem, "category" | "originNam
   currentAssignment: (Assignment & { transporterName: string | null; transporterPhone: string | null }) | null;
   assignmentHistory: { id: string; reference: string; status: AssignmentStatus; transporterName: string; addedAt: string; removedAt: string | null }[];
   availableActions: ActionInfo[];
+  /** Present when you could request collection for this batch (origin hospital staff / admin). */
+  collectionRequest: { enabled: boolean; reason: string | null; destination: { id: string; name: string } | null } | null;
 }
 
 export interface Incident {

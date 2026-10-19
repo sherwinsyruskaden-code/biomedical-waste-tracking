@@ -8,7 +8,11 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "node e2e/run.mjs"
+    "test:e2e": "node e2e/run.mjs",
+    "test:e2e:landing": "node e2e/landing.mjs",
+    "test:e2e:scan": "node e2e/scan.mjs",
+    "test:e2e:dates": "node e2e/dates.mjs",
+    "test:e2e:motion": "node e2e/motion.mjs"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

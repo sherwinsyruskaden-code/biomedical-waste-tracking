@@ -1,7 +1,7 @@
 import type { AssignmentStatus, BatchStatus, Role } from "./types";
 
 let tz: string | undefined;
-/** Timestamps are stored in UTC; we display them in the viewer's own timezone. */
+/** Timestamps are stored in UTC and shown in the ORGANIZATION's timezone (set when the session loads), so every screen, report and picker agrees. */
 export const setDisplayTimezone = (t?: string) => (tz = t);
 
 export function fmtDateTime(v?: string | Date | null) {
@@ -34,7 +34,10 @@ export const fmtQty = (q: number | null | undefined, unit?: string | null) =>
 
 export const humanize = (s?: string | null) => (s ? s.replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase()) : "");
 
-export const roleLabel: Record<Role, string> = { admin: "Admin", facility_staff: "Facility staff", transporter: "Transporter" };
+export const roleLabel: Record<Role, string> = { admin: "Organization admin", facility_staff: "Facility staff", transporter: "Transporter" };
+
+/** Plain-language facility types (stored as generator / storage / treatment). */
+export const facilityTypeLabel: Record<string, string> = { generator: "Hospital / clinic", storage: "Storage area", treatment: "Treatment plant" };
 
 /** Lifecycle order used by the custody rail. */
 export const lifecycle: BatchStatus[] = ["generated", "segregated", "collected", "in_transit", "delivered", "received", "disposed"];
@@ -52,7 +55,7 @@ export const statusMeta: Record<BatchStatus, { label: string; tone: "neutral" | 
 };
 
 export const assignmentMeta: Record<AssignmentStatus, { label: string; tone: "neutral" | "emerald" | "signal" | "warn" | "danger" | "ink" }> = {
-  assigned: { label: "Awaiting acceptance", tone: "warn" },
+  assigned: { label: "Awaiting transporter", tone: "warn" },
   accepted: { label: "Accepted", tone: "emerald" },
   in_progress: { label: "On the road", tone: "signal" },
   completed: { label: "Completed", tone: "ink" },
@@ -63,7 +66,7 @@ export const eventLabel: Record<string, string> = {
   created: "Batch registered",
   updated: "Details edited",
   segregated: "Segregation verified",
-  assigned: "Assigned for collection",
+  assigned: "Collection requested — transporter assigned",
   unassigned: "Removed from assignment",
   pickup: "Picked up — custody to transporter",
   transit_started: "Trip started",

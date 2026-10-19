@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { AlertOctagon, ArrowLeft, CheckCircle2, FlaskConical, MapPin, Navigation, Phone, Radio, ScanLine, Truck } from "lucide-react";
+import { AlertOctagon, ArrowLeft, ArrowRight, CheckCircle2, FlaskConical, MapPin, Navigation, Phone, Radio, ScanLine, Truck } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
 import { toast } from "sonner";
@@ -105,6 +105,15 @@ export default function AssignmentDetail() {
       refresh();
     },
   });
+  // Demo organization only: runs the real pickup / handover with the batch's real QR label, recorded as a simulated scan.
+  const simScan = useMutation({
+    mutationFn: ({ batchId, action }: { batchId: string; action: "pickup" | "handover" }) => api.post<{ batch: { trackingCode: string; status: BatchStatus }; container: string }>(`/api/demo/batches/${batchId}/simulate-scan`, { action }),
+    onSuccess: (r, v) => {
+      toast.success(v.action === "pickup" ? `Picked up ${r.batch.trackingCode}` : `Handed over ${r.batch.trackingCode}`, { description: `Simulated QR scan of ${r.container} (demo — no camera used). Status: ${r.batch.status.replace("_", " ")}.` });
+      refresh();
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
   const sim = useMutation({
     mutationFn: (run: boolean) => api.post<{ running: boolean }>(`/api/demo/assignments/${id}/simulate`, { run }),
     onSuccess: (r) => toast(r.running ? "Simulated trip running" : "Simulation stopped", { description: r.running ? "Positions are stored and shown as SIMULATED." : undefined }),
@@ -128,10 +137,10 @@ export default function AssignmentDetail() {
   const latest = livePoint ?? a.latestLocation;
   const pickedAll = a.batches.every((b) => b.status !== "segregated");
   const steps = [
-    { label: "Accept the job", done: a.status !== "assigned" },
-    { label: "Scan every container at pickup", done: pickedAll && a.status !== "assigned" },
-    { label: "Share location and start the trip", done: a.status === "in_progress" || a.status === "completed" },
-    { label: "Scan at the destination to hand over", done: a.status === "completed" },
+    { label: "Accept the collection request", done: a.status !== "assigned" },
+    { label: "Scan each batch at pickup", done: pickedAll && a.status !== "assigned" },
+    { label: "Start the trip (share location)", done: a.status === "in_progress" || a.status === "completed" },
+    { label: "Scan at the treatment plant to hand over", done: a.status === "completed" },
   ];
   const open = a.status !== "completed" && a.status !== "cancelled";
 
@@ -145,10 +154,15 @@ export default function AssignmentDetail() {
             <Badge tone={meta.tone} dot>{meta.label}</Badge>
             {a.trackingActive && <Badge tone="lime"><Radio className="size-3" /> Location shared</Badge>}
           </div>
-          <p className="mt-2 text-ink-2"><strong className="text-ink">{a.origin.name}</strong> to <strong className="text-ink">{a.destination.name}</strong> · due {fmtDateTime(a.dueBy)}</p>
+          <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-ink-2" data-testid="route">
+            <span>Origin: <strong className="text-ink">{a.origin.name}</strong></span>
+            <ArrowRight className="size-4 text-ink-3" aria-hidden />
+            <span>Destination: <strong className="text-ink">{a.destination.name}</strong></span>
+            <span className="text-ink-3">· Transporter: {a.transporter.fullName} · due {fmtDateTime(a.dueBy)}</span>
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {a.isMine && a.status === "assigned" && <Button onClick={() => act.mutate({ action: "accept" })} loading={act.isPending}>Accept job</Button>}
+          {a.isMine && a.status === "assigned" && <Button onClick={() => act.mutate({ action: "accept" })} loading={act.isPending}>Accept request</Button>}
           {a.isMine && a.status === "accepted" && <Button onClick={() => act.mutate({ action: "start" })} loading={act.isPending} disabled={!pickedAll} title={pickedAll ? undefined : "Pick up every batch first"}>Start trip</Button>}
           {a.isMine && (a.status === "assigned" || a.status === "accepted") && <Button variant="secondary" onClick={() => setReasonFor("decline")}>Decline</Button>}
           {isAdmin && (a.status === "assigned" || a.status === "accepted") && <Button variant="secondary" onClick={() => setReassign(true)}>Change transporter</Button>}
@@ -194,6 +208,17 @@ export default function AssignmentDetail() {
                     <div className="flex gap-2">
                       {canPickup && <Button onClick={() => setDialog({ action: "pickup", target })} icon={<ScanLine className="size-4" />}>Scan pickup</Button>}
                       {canHandover && <Button onClick={() => setDialog({ action: "handover", target })} icon={<ScanLine className="size-4" />}>Scan handover</Button>}
+                      {me.features.demoOrg && (canPickup || canHandover) && (
+                        <Button
+                          variant="secondary"
+                          onClick={() => simScan.mutate({ batchId: b.id, action: canPickup ? "pickup" : "handover" })}
+                          loading={simScan.isPending && simScan.variables?.batchId === b.id}
+                          icon={<FlaskConical className="size-4" />}
+                          title="Demo only: uses this batch's real QR label without a camera. Recorded as a simulated scan."
+                        >
+                          Simulate QR scan (demo)
+                        </Button>
+                      )}
                       {isAdmin && b.status === "segregated" && (a.status === "assigned" || a.status === "accepted") && a.batches.length > 1 && (
                         <Button variant="ghost" size="sm" onClick={() => removeBatch.mutate(b.id)} loading={removeBatch.isPending}>Remove</Button>
                       )}
@@ -235,7 +260,12 @@ export default function AssignmentDetail() {
             </dl>
             {a.notes && <p className="mt-4 rounded-[10px] bg-mist px-3 py-2 text-sm text-ink-2">{a.notes}</p>}
           </Panel>
-          <Panel title="Destination">
+          <Panel title="Origin (pickup)">
+            <p className="font-semibold">{a.origin.name}</p>
+            <p className="text-sm text-ink-2">{a.origin.address}{a.origin.city ? `, ${a.origin.city}` : ""}</p>
+            {a.origin.contactPhone && <a href={`tel:${a.origin.contactPhone}`} className="mt-1 inline-flex items-center gap-1 text-sm text-emerald-700"><Phone className="size-3.5" /> {a.origin.contactName ?? "Contact"} {a.origin.contactPhone}</a>}
+          </Panel>
+          <Panel title="Destination (treatment plant)">
             <p className="font-semibold">{a.destination.name}</p>
             <p className="text-sm text-ink-2">{a.destination.address}{a.destination.city ? `, ${a.destination.city}` : ""}</p>
             {a.destination.contactPhone && <a href={`tel:${a.destination.contactPhone}`} className="mt-1 inline-flex items-center gap-1 text-sm text-emerald-700"><Phone className="size-3.5" /> {a.destination.contactName ?? "Contact"} {a.destination.contactPhone}</a>}

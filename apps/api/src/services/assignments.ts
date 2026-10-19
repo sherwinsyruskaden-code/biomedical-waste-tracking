@@ -1,12 +1,15 @@
 import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { db, type Tx } from "../db/client.js";
-import { assignmentBatches, assignments, custodyEvents, facilities, memberships, users, wasteBatches } from "../db/schema.js";
+import { assignmentBatches, assignments, custodyEvents, facilities, memberships, organizations, users, wasteBatches } from "../db/schema.js";
 import { audit } from "../lib/audit.js";
 import { humanCode } from "../lib/crypto.js";
+import { assertDueTime, assertPickupTime, assertRerouteDue, orgTimezone } from "../lib/dates.js";
 import { badRequest, conflict, forbidden, invalidTransition, notFound } from "../lib/errors.js";
 import { publish } from "../lib/events.js";
 import type { Actor } from "../lib/http.js";
 import { notify } from "./notify.js";
+import { resolveTreatmentPlant } from "./orgs.js";
+import { readSettings } from "./settings.js";
 
 type Assignment = typeof assignments.$inferSelect;
 type Batch = typeof wasteBatches.$inferSelect;
@@ -100,9 +103,17 @@ export interface CreateAssignmentInput {
   notes?: string | null;
 }
 
-export async function createAssignment(actor: Actor, input: CreateAssignmentInput) {
+/**
+ * `backfill` is for the synthetic demo seeder only (it creates jobs that "started earlier today").
+ * The HTTP route never passes it, so API users always get the scheduling limits.
+ */
+export async function createAssignment(actor: Actor, input: CreateAssignmentInput, opts: { backfill?: boolean } = {}) {
   if (input.originFacilityId === input.destinationFacilityId) throw badRequest("Pickup and destination must be different facilities.");
-  if (input.dueBy <= input.scheduledPickupAt) throw badRequest("The due time must be after the scheduled pickup.");
+  if (!opts.backfill) {
+    const tz = await orgTimezone(actor.orgId);
+    assertPickupTime(input.scheduledPickupAt, tz);
+    assertDueTime(input.dueBy, input.scheduledPickupAt, tz);
+  } else if (input.dueBy <= input.scheduledPickupAt) throw badRequest("The due time must be after the scheduled pickup.");
   const result = await db.transaction(async (tx) => {
     await assertTransporter(tx, actor.orgId, input.transporterUserId);
     await assertFacility(tx, actor.orgId, input.originFacilityId);
@@ -140,6 +151,68 @@ export async function createAssignment(actor: Actor, input: CreateAssignmentInpu
   });
   publish({ type: "assignment", organizationId: actor.orgId, payload: { assignmentId: result.id, status: result.status } });
   return result;
+}
+
+/** The active transporter with the fewest open jobs (ties: longest-serving member). */
+async function pickTransporter(tx: Tx, orgId: string) {
+  const [t] = await tx
+    .select({ userId: memberships.userId })
+    .from(memberships)
+    .where(and(eq(memberships.organizationId, orgId), eq(memberships.role, "transporter"), eq(memberships.status, "active")))
+    .orderBy(
+      sql`(select count(*) from ${assignments} a where a.organization_id = ${orgId} and a.transporter_user_id = ${memberships.userId} and a.status in ('assigned','accepted','in_progress'))`,
+      memberships.createdAt,
+    )
+    .limit(1);
+  if (!t) throw badRequest("No active transporter is available. Ask your organization admin to invite one.");
+  return t.userId;
+}
+
+/** Hours a transporter has, from the request, to deliver to the treatment plant. */
+export const COLLECTION_WINDOW_HOURS = 4;
+
+/** Where a collection request for this batch would go (shown before staff confirm). */
+export async function collectionDestination(actor: Actor, batch: Batch) {
+  const [org] = await db.select({ settings: organizations.settings }).from(organizations).where(eq(organizations.id, actor.orgId));
+  return resolveTreatmentPlant(db, actor.orgId, readSettings(org.settings).defaultTreatmentFacilityId, batch.originFacilityId);
+}
+
+/**
+ * Hospital staff ask for a segregated batch to be collected. The destination is the organization's
+ * configured, authorised treatment plant (never chosen ad hoc) and the request goes to a transporter,
+ * who must accept it. `opts.transporterUserId` is for the demo seeder only (deterministic demo data).
+ */
+export async function requestCollection(actor: Actor, batchId: string, input: { notes?: string | null }, opts: { transporterUserId?: string } = {}) {
+  const [batch] = await db.select().from(wasteBatches).where(and(eq(wasteBatches.id, batchId), eq(wasteBatches.organizationId, actor.orgId)));
+  if (!batch) throw notFound("Batch");
+  const atOrigin = actor.role === "admin" || (actor.role === "facility_staff" && actor.facilityIds.includes(batch.originFacilityId));
+  if (!atOrigin) {
+    const seesIt = actor.role === "facility_staff" && !!batch.destinationFacilityId && actor.facilityIds.includes(batch.destinationFacilityId);
+    if (seesIt) throw forbidden("Only staff at the origin hospital can request collection.");
+    throw notFound("Batch");
+  }
+  if (batch.currentAssignmentId) throw conflict(`Collection has already been requested for ${batch.trackingCode}.`);
+  if (batch.status === "generated") throw invalidTransition("Verify segregation before requesting collection.");
+  if (batch.status !== "segregated") throw invalidTransition(`${batch.trackingCode} is ${batch.status.replace("_", " ")} and cannot be collected.`);
+  const plant = await collectionDestination(actor, batch);
+  const transporterUserId = opts.transporterUserId ?? (await pickTransporter(db, actor.orgId));
+  const now = Date.now();
+  const asg = await createAssignment(actor, {
+    transporterUserId,
+    originFacilityId: batch.originFacilityId,
+    destinationFacilityId: plant.id,
+    batchIds: [batch.id],
+    scheduledPickupAt: new Date(now),
+    dueBy: new Date(now + COLLECTION_WINDOW_HOURS * 3600_000),
+    notes: input.notes ? `Collection request: ${input.notes}` : "Collection requested by hospital staff.",
+  });
+  await notify(db, actor.orgId, { facilityStaffAt: [plant.id] }, {
+    kind: "assignment",
+    title: `Incoming waste: ${batch.trackingCode}`,
+    body: `Collection requested. A transporter will deliver it to ${plant.name}.`,
+    link: `/batches/${batch.id}`,
+  });
+  return asg;
 }
 
 type AsgAction = "accept" | "decline" | "start" | "cancel";
@@ -220,7 +293,7 @@ export async function updateAssignment(
       await notify(tx, actor.orgId, { userIds: [a.transporterUserId] }, { kind: "assignment", title: `Job ${a.reference} reassigned`, body: "This job was reassigned to another transporter.", link: `/assignments` });
     }
     if (input.dueBy) {
-      if (input.dueBy <= a.scheduledPickupAt) throw badRequest("The due time must be after the scheduled pickup.");
+      assertDueTime(input.dueBy, a.scheduledPickupAt, await orgTimezone(actor.orgId));
       patch.dueBy = input.dueBy;
     }
     if (input.vehicleReg !== undefined) patch.vehicleReg = input.vehicleReg;
@@ -272,7 +345,7 @@ export async function createRerouteAssignment(tx: Tx, actor: Actor, batch: Batch
   if (destinationFacilityId === fromId) throw badRequest("Choose a different receiving facility.");
   await assertFacility(tx, actor.orgId, destinationFacilityId, true);
   const now = new Date();
-  if (dueBy <= now) throw badRequest("The new due time must be in the future.");
+  assertRerouteDue(dueBy, await orgTimezone(actor.orgId));
   await tx.update(assignmentBatches).set({ removedAt: now }).where(and(eq(assignmentBatches.batchId, batch.id), isNull(assignmentBatches.removedAt)));
   const [asg] = await tx
     .insert(assignments)

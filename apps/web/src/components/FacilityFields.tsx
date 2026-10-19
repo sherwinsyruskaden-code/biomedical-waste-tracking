@@ -69,9 +69,9 @@ export function FacilityFields({ value, onChange, error, prefix = "", compact }:
       </Field>
       <Field label="Facility type" htmlFor={`${prefix}ftype`} error={fe("type")}>
         <Select id={`${prefix}ftype`} value={value.type} onChange={(e) => { const t = e.target.value as FacilityDraft["type"]; onChange({ ...value, type: t, canReceive: t === "treatment" ? true : value.canReceive }); }}>
-          <option value="generator">Generates waste (hospital, clinic, lab)</option>
-          <option value="storage">Storage / collection point</option>
-          <option value="treatment">Treatment / disposal facility</option>
+          <option value="generator">Hospital / clinic / lab (generates waste)</option>
+          <option value="storage">Intermediate storage point</option>
+          <option value="treatment">Treatment plant (receives and treats waste)</option>
         </Select>
       </Field>
       <div className="sm:col-span-2">

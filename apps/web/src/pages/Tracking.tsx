@@ -72,7 +72,7 @@ export default function Tracking() {
   const sel = rows.find((r) => r.id === selected) ?? null;
   const vehicles: MapVehicle[] = rows
     .filter((r) => r.latestPoint)
-    .map((r) => ({ assignmentId: r.id, label: `${r.reference} — ${r.transporterName}`, sublabel: `${r.originName} to ${r.destinationName}`, point: r.latestPoint!, stale: isStale(r.latestPoint), selected: r.id === selected }));
+    .map((r) => ({ assignmentId: r.id, label: `${r.reference} — ${r.transporterName}`, sublabel: `${r.originName} → ${r.destinationName}`, point: r.latestPoint!, stale: isStale(r.latestPoint), selected: r.id === selected }));
   const facilities = sel ? data.facilities.filter((f) => f.id === sel.originFacilityId || f.id === sel.destinationFacilityId) : data.facilities;
 
   return (
@@ -99,7 +99,8 @@ export default function Tracking() {
             <Panel title={sel.reference} actions={<button className="text-sm font-semibold text-emerald-700 hover:underline" onClick={() => setSelected(null)}>Show all</button>}>
               <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
                 <dt className="text-ink-3">Transporter</dt><dd className="font-semibold">{sel.transporterName}{sel.vehicleReg ? ` · ${sel.vehicleReg}` : ""}</dd>
-                <dt className="text-ink-3">Route</dt><dd>{sel.originName} to {sel.destinationName}</dd>
+                <dt className="text-ink-3">Origin</dt><dd>{sel.originName}</dd>
+                <dt className="text-ink-3">Destination</dt><dd>{sel.destinationName}</dd>
                 <dt className="text-ink-3">Due</dt><dd>{fmtDateTime(sel.dueBy)}</dd>
                 <dt className="text-ink-3">Last fix</dt><dd className={clsx(isStale(sel.latestPoint) && "font-semibold text-danger")}>{sel.latestPoint ? `${fmtTime(sel.latestPoint.recordedAt)} (${timeAgo(sel.latestPoint.recordedAt, now)})` : "No position yet"}</dd>
                 {sel.latestPoint?.accuracyM != null && <><dt className="text-ink-3">Accuracy</dt><dd>±{Math.round(sel.latestPoint.accuracyM)} m{sel.latestPoint.accuracyM > 100 && <span className="text-warn"> (poor)</span>}</dd></>}

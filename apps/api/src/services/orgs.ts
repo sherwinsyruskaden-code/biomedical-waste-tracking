@@ -35,14 +35,38 @@ export const orgInput = z.object({
   type: z.enum(orgTypeEnum.enumValues),
 });
 
-/** Creates an organization, its first admin membership, default categories and optional first facility. */
+/**
+ * The treatment plant that receives this organization's waste: the one configured in settings,
+ * or the only authorised treatment plant if there is exactly one. Throws a clear message otherwise.
+ */
+export async function resolveTreatmentPlant(tx: Tx, orgId: string, configuredId: string | null | undefined, originId?: string) {
+  const candidates = await tx
+    .select()
+    .from(facilities)
+    .where(and(eq(facilities.organizationId, orgId), eq(facilities.active, true), eq(facilities.canReceive, true)));
+  const usable = candidates.filter((f) => f.id !== originId);
+  if (configuredId) {
+    const configured = usable.find((f) => f.id === configuredId);
+    if (configured) return configured;
+  }
+  const plants = usable.filter((f) => f.type === "treatment");
+  if (plants.length === 1) return plants[0];
+  if (plants.length === 0) throw badRequest("No authorised treatment plant is set up yet. Ask your organization admin to add one.");
+  throw badRequest("More than one treatment plant is available. Ask your organization admin to choose the default treatment plant in Settings.");
+}
+
+/**
+ * Creates an organization, its first admin membership, default categories and optional first facility.
+ * The organization starts PENDING: its members can sign in but cannot operate until a platform
+ * administrator approves it (see services/platform.ts).
+ */
 export async function createOrganization(
   tx: Tx,
   input: { org: z.infer<typeof orgInput>; facility?: FacilityInput | null; adminUserId: string; contactEmail: string },
 ) {
   const [org] = await tx
     .insert(organizations)
-    .values({ name: input.org.name, type: input.org.type, contactEmail: input.contactEmail })
+    .values({ name: input.org.name, type: input.org.type, contactEmail: input.contactEmail, applicantUserId: input.adminUserId })
     .returning();
   await tx.insert(memberships).values({ organizationId: org.id, userId: input.adminUserId, role: "admin" });
   await tx.insert(wasteCategories).values(defaultCategories.map((c) => ({ ...c, organizationId: org.id })));

@@ -20,6 +20,8 @@ export const orgSettingsSchema = z.object({
   locationRetentionDays: z.number().int().min(7).max(3650).default(180),
   /** Allowed difference (%) between generated and received quantity before flagging. */
   weightTolerancePercent: z.number().min(0).max(100).default(10),
+  /** Where collection requests are delivered. Empty = the organization's only treatment plant. */
+  defaultTreatmentFacilityId: z.string().uuid().nullable().default(null),
 });
 
 export type OrgSettings = z.infer<typeof orgSettingsSchema>;

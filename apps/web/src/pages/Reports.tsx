@@ -6,7 +6,9 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { EmptyState, ErrorState, Field, Input, LoadingBlock, PageHeader, Panel, Select } from "../components/ui";
 import { api, qs } from "../lib/api";
 import { fmtDateTime, humanize } from "../lib/format";
+import { MIN_DAY, addDays, dayIssue, todayIn } from "../lib/dates";
 import { useCategories, useFacilities, useMembers } from "../lib/queries";
+import { useOrgTimezone } from "../lib/session";
 
 const types = [
   { id: "batches", label: "Batch register", desc: "Every batch with route, status and disposal" },
@@ -35,8 +37,10 @@ const cell = (k: string, v: unknown) => {
 
 export default function Reports() {
   const [type, setType] = useState<(typeof types)[number]["id"]>("batches");
-  const [from, setFrom] = useState(() => new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10));
-  const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const tz = useOrgTimezone();
+  const today = todayIn(tz);
+  const [from, setFrom] = useState(() => addDays(todayIn(tz), -30));
+  const [to, setTo] = useState(() => todayIn(tz));
   const [facilityId, setFacilityId] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [status, setStatus] = useState("");
@@ -47,15 +51,19 @@ export default function Reports() {
   const transporters = useMembers("transporter");
   const params = {
     type,
-    from: from ? new Date(from + "T00:00:00").toISOString() : "",
-    to: to ? new Date(to + "T23:59:59").toISOString() : "",
+    from,
+    to,
     facilityId,
     categoryId,
     status,
     transporterUserId,
     disposal,
   };
-  const q = useQuery({ queryKey: ["reports", params], queryFn: () => api.get<Report>(`/api/reports${qs(params)}`), placeholderData: (p) => p });
+  const dateError =
+    (from && dayIssue(from, tz) && `From: ${dayIssue(from, tz)}`) ||
+    (to && dayIssue(to, tz) && `To: ${dayIssue(to, tz)}`) ||
+    (from && to && from > to ? "The From date must be on or before the To date." : null);
+  const q = useQuery({ enabled: !dateError, queryKey: ["reports", params], queryFn: () => api.get<Report>(`/api/reports${qs(params)}`), placeholderData: (p) => p });
   const exportUrl = (format: "csv" | "pdf") => `/api/reports${qs({ ...params, format })}`;
   const chart =
     type === "volume_by_category" && q.data
@@ -71,8 +79,8 @@ export default function Reports() {
         description="Built from recorded data and limited to what you're allowed to see. Export to CSV for spreadsheets or PDF for sharing."
         actions={
           <>
-            <a href={exportUrl("csv")} className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-line-2 bg-paper px-4 text-sm font-semibold hover:border-emerald-600" download><Download className="size-4" /> CSV</a>
-            <a href={exportUrl("pdf")} className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700" download><FileText className="size-4" /> PDF</a>
+            <a href={dateError ? undefined : exportUrl("csv")} aria-disabled={!!dateError} className="aria-disabled:pointer-events-none aria-disabled:opacity-50 inline-flex h-10 items-center gap-2 rounded-[10px] border border-line-2 bg-paper px-4 text-sm font-semibold hover:border-emerald-600" download><Download className="size-4" /> CSV</a>
+            <a href={dateError ? undefined : exportUrl("pdf")} aria-disabled={!!dateError} className="aria-disabled:pointer-events-none aria-disabled:opacity-50 inline-flex h-10 items-center gap-2 rounded-[10px] bg-emerald-600 px-4 text-sm font-semibold text-white hover:bg-emerald-700" download><FileText className="size-4" /> PDF</a>
           </>
         }
       />
@@ -88,9 +96,10 @@ export default function Reports() {
           </nav>
           <div className="flex flex-col gap-3 rounded-[16px] border border-line bg-paper p-4">
             <div className="grid grid-cols-2 gap-2">
-              <Field label="From" htmlFor="rf"><Input id="rf" type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
-              <Field label="To" htmlFor="rt"><Input id="rt" type="date" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
+              <Field label="From" htmlFor="rf"><Input id="rf" type="date" min={MIN_DAY} max={today} aria-invalid={!!dateError || undefined} value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
+              <Field label="To" htmlFor="rt"><Input id="rt" type="date" min={MIN_DAY} max={today} aria-invalid={!!dateError || undefined} value={to} onChange={(e) => setTo(e.target.value)} /></Field>
             </div>
+            {dateError && <p className="text-[13px] text-danger" role="alert" data-testid="report-date-error">{dateError}</p>}
             <Field label="Facility" htmlFor="rfa"><Select id="rfa" value={facilityId} onChange={(e) => setFacilityId(e.target.value)}><option value="">All</option>{facilities.data?.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</Select></Field>
             <Field label="Category" htmlFor="rc"><Select id="rc" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}><option value="">All</option>{categories.data?.map((c) => <option key={c.id} value={c.id}>{c.code}</option>)}</Select></Field>
             <Field label="Batch status" htmlFor="rs"><Select id="rs" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Any</option>{["generated", "segregated", "collected", "in_transit", "delivered", "received", "disposed", "rejected", "cancelled"].map((s) => <option key={s} value={s}>{humanize(s)}</option>)}</Select></Field>

@@ -1,18 +1,19 @@
 import { Router } from "express";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 import { hash, verify } from "@node-rs/argon2";
-import { and, eq, gt, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import { memberships, organizations, passwordResetTokens, sessions, users } from "../db/schema.js";
 import { env } from "../env.js";
 import { audit } from "../lib/audit.js";
 import { randomToken, sha256 } from "../lib/crypto.js";
-import { AppError, badRequest, conflict, unauthorized } from "../lib/errors.js";
+import { AppError, badRequest, conflict, notFound, unauthorized } from "../lib/errors.js";
 import { route, zId, zOptionalText } from "../lib/http.js";
 import { sendMail } from "../lib/mailer.js";
 import { clearSessionCookie, createSession } from "../lib/session.js";
 import { createOrganization, facilityInput, orgInput } from "../services/orgs.js";
+import { DEMO_ORG_NAME, demoIsComplete, demoPeople, seedDemo } from "../services/demo.js";
 
 export const router = Router();
 const base = "/api/auth";
@@ -57,6 +58,10 @@ const resetLimiter = rateLimit({
     res.status(429).json({ error: { code: "rate_limited", message: "Too many requests. Please try again later." } }),
 });
 router.use("/login", authLimiter);
+router.use(
+  "/demo-login",
+  rateLimit({ windowMs: 15 * 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false, handler: (_req, res) => res.status(429).json({ error: { code: "rate_limited", message: "Too many demo sign-ins. Please wait a few minutes." } }) }),
+);
 router.use("/forgot-password", resetLimiter);
 router.use("/reset-password", resetLimiter);
 
@@ -104,11 +109,13 @@ route(router, base, { method: "post", path: "/login", summary: "Sign in with ema
     await audit({ action: "auth.login_failed", metadata: { email: body.email }, ip: req.ip });
     throw new AppError(401, "invalid_credentials", "Invalid email or password.");
   }
+  // Open an approved organization first; a pending one is shown its approval status instead.
   const [m] = await db
     .select({ organizationId: memberships.organizationId })
     .from(memberships)
+    .innerJoin(organizations, eq(organizations.id, memberships.organizationId))
     .where(and(eq(memberships.userId, user.id), eq(memberships.status, "active")))
-    .orderBy(memberships.createdAt)
+    .orderBy(desc(sql`${organizations.status} = 'approved'`), memberships.createdAt)
     .limit(1);
   await createSession(res, req, user.id, m?.organizationId ?? null);
   await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
@@ -126,7 +133,7 @@ route(router, base, { method: "post", path: "/logout", summary: "Sign out and in
 route(router, base, { method: "get", path: "/me", summary: "Current user, memberships and active organization", tag: "Auth", access: "public" }, async ({ auth }) => {
   if (!auth) throw unauthorized();
   const [user] = await db
-    .select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, createdAt: users.createdAt })
+    .select({ id: users.id, email: users.email, fullName: users.fullName, phone: users.phone, isPlatformAdmin: users.isPlatformAdmin, createdAt: users.createdAt })
     .from(users)
     .where(eq(users.id, auth.user.id));
   const mems = await db
@@ -134,6 +141,7 @@ route(router, base, { method: "get", path: "/me", summary: "Current user, member
       id: memberships.id,
       organizationId: memberships.organizationId,
       organizationName: organizations.name,
+      organizationStatus: organizations.status,
       role: memberships.role,
       status: memberships.status,
     })
@@ -143,14 +151,14 @@ route(router, base, { method: "get", path: "/me", summary: "Current user, member
   let organization = null;
   if (auth.membership) {
     const [o] = await db.select().from(organizations).where(eq(organizations.id, auth.membership.organizationId));
-    organization = { id: o.id, name: o.name, type: o.type, timezone: o.timezone };
+    organization = { id: o.id, name: o.name, type: o.type, timezone: o.timezone, status: o.status, submittedAt: o.submittedAt, reviewedAt: o.reviewedAt, reviewNote: o.reviewNote };
   }
   return {
     user,
     membership: auth.membership,
     organization,
     memberships: mems,
-    features: { demoMode: env.DEMO_MODE },
+    features: { demoMode: env.DEMO_MODE, demoOrg: env.DEMO_MODE && organization?.name === DEMO_ORG_NAME },
   };
 });
 
@@ -221,4 +229,66 @@ route(router, base, { method: "post", path: "/reset-password", summary: "Set a n
     await audit({ actorUserId: t.userId, action: "auth.password_reset", ip: req.ip }, tx);
   });
   return { ok: true };
+});
+
+// ------------------------------------------------------------------ one-click demo sign-in (DEMO_MODE only)
+const demoAccounts = [
+  { key: "staff", label: "Hospital staff — Hospital A", facility: "Sunrise General Hospital", description: "Registers waste and requests collection. Sees only Hospital A's batches." },
+  { key: "staffB", label: "Hospital staff — Hospital B", facility: "Sunrise Women & Children Hospital", description: "Same role at a different hospital. Cannot see Hospital A's batches." },
+  { key: "driver", label: "Transporter", facility: "Vehicle TN 22 DEMO 101", description: "Accepts collection requests, simulates QR scans, completes delivery." },
+  { key: "plant", label: "Treatment-plant staff", facility: "GreenCycle CBWTF", description: "Receives incoming waste and records treatment / disposal." },
+  { key: "admin", label: "Organization administrator", facility: "Sunrise Health Network", description: "Manages facilities, team and settings across the organization." },
+  { key: "platform", label: "Platform administrator", facility: "Platform review", description: "Approves or rejects pending organization registrations." },
+] as const;
+type DemoKey = (typeof demoAccounts)[number]["key"];
+
+let seeding: Promise<unknown> | null = null;
+/**
+ * Creates the synthetic demo data on first use (concurrent requests share one run). If the demo is
+ * missing an account (e.g. it was created by an older version), it is recreated — demo data only.
+ */
+async function ensureDemoOrg() {
+  const [org] = await db.select({ id: organizations.id }).from(organizations).where(eq(organizations.name, DEMO_ORG_NAME));
+  if (org && (await demoIsComplete())) return org.id;
+  seeding ??= seedDemo({ reset: true, log: () => undefined }).finally(() => (seeding = null));
+  await seeding;
+  const [created] = await db.select({ id: organizations.id }).from(organizations).where(eq(organizations.name, DEMO_ORG_NAME));
+  return created.id;
+}
+
+route(router, base, { method: "get", path: "/demo", summary: "Whether one-click demo sign-in is enabled, and its accounts", tag: "Auth", access: "public" }, async () => ({
+  enabled: env.DEMO_MODE,
+  accounts: env.DEMO_MODE ? demoAccounts : [],
+}));
+
+route(router, base, {
+  method: "post",
+  path: "/demo-login",
+  summary: "DEMO MODE ONLY: sign in to the synthetic demo organization as one of its demo users",
+  tag: "Auth",
+  access: "public",
+  body: z.object({ account: z.enum(demoAccounts.map((a) => a.key) as [DemoKey, ...DemoKey[]]) }),
+}, async ({ body, req, res }) => {
+  if (!env.DEMO_MODE) throw notFound("Endpoint");
+  const orgId = await ensureDemoOrg();
+  const email = demoPeople.find((p) => p.key === body.account)!.email;
+  if (body.account === "platform") {
+    // The platform reviewer belongs to no organization; the flag was set by the demo seeder.
+    const [u] = await db.select({ id: users.id }).from(users).where(and(eq(users.email, email), eq(users.isPlatformAdmin, true)));
+    if (!u) throw new AppError(409, "demo_unavailable", "The demo platform administrator is missing. Recreate the demo with `npm run db:seed:reset`.");
+    await createSession(res, req, u.id, null, db, { demo: true });
+    await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, u.id));
+    await audit({ actorUserId: u.id, action: "auth.demo_login", ip: req.ip });
+    return { ok: true, home: "/platform" };
+  }
+  const [row] = await db
+    .select({ userId: users.id })
+    .from(users)
+    .innerJoin(memberships, and(eq(memberships.userId, users.id), eq(memberships.organizationId, orgId), eq(memberships.status, "active")))
+    .where(eq(users.email, email));
+  if (!row) throw new AppError(409, "demo_unavailable", "The demo account is missing or disabled. Recreate the demo with `npm run db:seed:reset`.");
+  await createSession(res, req, row.userId, orgId, db, { demo: true }); // replaces any existing session; short-lived
+  await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, row.userId));
+  await audit({ organizationId: orgId, actorUserId: row.userId, action: "auth.demo_login", ip: req.ip });
+  return { ok: true, home: "/dashboard" };
 });

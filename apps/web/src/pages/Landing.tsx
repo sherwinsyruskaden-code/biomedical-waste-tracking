@@ -1,15 +1,16 @@
 import clsx from "clsx";
-import { FileSpreadsheet, MapPinned, QrCode, ShieldCheck, Truck, UserCog, Warehouse } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
+import { BadgeCheck, Factory, FileSpreadsheet, Hospital, MapPinned, QrCode, ShieldCheck, Truck, UserCog } from "lucide-react";
+import { motion, useMotionValue, useReducedMotion, useSpring, useTransform } from "motion/react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { Logo } from "../components/AppShell";
 import { useMe } from "../lib/session";
+import { DemoLogin } from "../components/DemoLogin";
 
 const stages = [
-  { key: "generated", title: "Generated", who: "Facility staff", records: "Category, weight, ward, container count. A QR label is printed for every container." },
-  { key: "segregated", title: "Segregated", who: "Facility staff", records: "Someone confirms the bag colour matches the waste and signs it off." },
-  { key: "collected", title: "Collected", who: "Transporter", records: "The driver scans each container. Custody moves from the facility to the named driver." },
+  { key: "generated", title: "Generated", who: "Hospital staff", records: "Category, weight, ward, container count. A QR label is printed for every container." },
+  { key: "segregated", title: "Segregated", who: "Hospital staff", records: "Someone confirms the bag colour matches the waste, then requests collection to the treatment plant." },
+  { key: "collected", title: "Collected", who: "Transporter", records: "The transporter accepts the request and scans at pickup. Custody moves from the hospital to the named driver." },
   { key: "in_transit", title: "In transit", who: "Transporter", records: "Phone GPS shares the vehicle's position, accuracy and time of every fix." },
   { key: "delivered", title: "Delivered", who: "Transporter", records: "Containers are scanned again at the gate and handed over to the plant." },
   { key: "received", title: "Received", who: "Plant staff", records: "Weight and condition are checked. Mismatches open an incident automatically." },
@@ -74,50 +75,91 @@ function CustodyRail() {
   );
 }
 
+/** A little depth: the card tilts a few degrees toward the pointer. Off for reduced motion and touch screens. */
+function Tilt({ children }: { children: React.ReactNode }) {
+  const reduce = useReducedMotion();
+  const px = useMotionValue(0);
+  const py = useMotionValue(0);
+  const sx = useSpring(px, { stiffness: 150, damping: 18 });
+  const sy = useSpring(py, { stiffness: 150, damping: 18 });
+  const rotateY = useTransform(sx, [-0.5, 0.5], [-4, 4]);
+  const rotateX = useTransform(sy, [-0.5, 0.5], [3, -3]);
+  if (reduce) return <>{children}</>;
+  return (
+    <div style={{ perspective: 1100 }}>
+      <motion.div
+        style={{ rotateX, rotateY, transformStyle: "preserve-3d" }}
+        onPointerMove={(e) => {
+          if (e.pointerType !== "mouse") return;
+          const r = e.currentTarget.getBoundingClientRect();
+          px.set((e.clientX - r.left) / r.width - 0.5);
+          py.set((e.clientY - r.top) / r.height - 0.5);
+        }}
+        onPointerLeave={() => {
+          px.set(0);
+          py.set(0);
+        }}
+      >
+        {children}
+      </motion.div>
+    </div>
+  );
+}
+
 export default function Landing() {
+  const reduceMotion = useReducedMotion();
   const { data: me } = useMe();
-  const signedIn = !!me?.membership;
+  const signedIn = !!me?.membership || !!me?.user.isPlatformAdmin;
   return (
     <div className="min-h-dvh bg-paper">
       <header className="mx-auto flex max-w-[1200px] items-center justify-between px-5 py-5 md:px-8">
         <Logo />
         <nav className="flex items-center gap-2">
-          {signedIn ? (
-            <Link to="/dashboard" className="rounded-[10px] bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
+          {signedIn && (
+            <Link to={me?.membership ? "/dashboard" : "/platform"} className="rounded-[10px] border border-emerald-600 px-4 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50">
               Open dashboard
             </Link>
-          ) : (
-            <>
-              <Link to="/login" className="rounded-[10px] px-3 py-2 text-sm font-semibold text-ink-2 hover:bg-mist">
-                Sign in
-              </Link>
-              <Link to="/signup" className="rounded-[10px] bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
-                Create organization
-              </Link>
-            </>
           )}
+          <Link to="/login" className="rounded-[10px] px-3 py-2 text-sm font-semibold text-ink-2 hover:bg-mist">
+            Sign in
+          </Link>
+          <Link to="/signup" className="rounded-[10px] bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
+            Create an account
+          </Link>
         </nav>
       </header>
 
       <section className="mx-auto grid max-w-[1200px] items-center gap-10 px-5 pb-16 pt-6 md:px-8 lg:grid-cols-[1.05fr_1fr] lg:gap-14 lg:pb-24 lg:pt-12">
-        <div>
+        <motion.div initial={reduceMotion ? false : { opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: [0.22, 0.8, 0.3, 1] }}>
           <h1 className="text-[44px] font-extrabold leading-[1.02] tracking-[-0.035em] md:text-[64px]">
             Every bag of biomedical waste, accounted for until it's destroyed.
           </h1>
           <p className="mt-6 max-w-[54ch] text-[17px] text-ink-2">
             Label containers with QR codes, record each handover with a scan, watch the collection vehicle on a live map, and keep an unbroken custody record from the ward to the treatment plant.
           </p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <Link to={signedIn ? "/dashboard" : "/signup"} className="inline-flex h-12 items-center rounded-[12px] bg-emerald-600 px-6 font-semibold text-white shadow-[0_1px_0_#047857,0_10px_24px_-10px_rgb(5_150_105/0.8)] hover:bg-emerald-700">
-              {signedIn ? "Open dashboard" : "Set up your organization"}
+          <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3">
+            <Link to="/signup" className="inline-flex h-12 items-center rounded-[12px] bg-emerald-600 px-6 font-semibold text-white shadow-[0_1px_0_#047857,0_10px_24px_-10px_rgb(5_150_105/0.8)] hover:bg-emerald-700">
+              Create an account
             </Link>
-            <Link to="/login" className="inline-flex h-12 items-center rounded-[12px] border border-line-2 px-6 font-semibold text-ink hover:border-emerald-600">
-              I have an invitation
-            </Link>
+            <p className="text-[14.5px] text-ink-2">
+              Already have an invitation?{" "}
+              <Link to="/invite" className="font-semibold text-emerald-700 underline decoration-emerald-300 underline-offset-4 hover:decoration-emerald-700">Accept invitation</Link>
+            </p>
           </div>
-          <p className="mt-5 text-[13.5px] text-ink-3">Free to run on your own server. No card, no trial clock.</p>
-        </div>
-        <CustodyRail />
+          {signedIn && (
+            <p className="mt-5 text-[14.5px] text-ink-2" data-testid="signed-in-note">
+              You're signed in as <strong>{me?.user.fullName}</strong>.{" "}
+              <Link to={me?.membership ? "/dashboard" : "/platform"} className="font-semibold text-emerald-700 underline decoration-emerald-300 underline-offset-4 hover:decoration-emerald-700">Open your dashboard</Link>
+            </p>
+          )}
+        </motion.div>
+        <Tilt>
+          <CustodyRail />
+        </Tilt>
+      </section>
+
+      <section id="demo" className="mx-auto max-w-[1200px] px-5 pb-16 md:px-8">
+        <DemoLogin variant="landing" />
       </section>
 
       <section className="border-y border-line bg-mist">
@@ -137,12 +179,15 @@ export default function Landing() {
       </section>
 
       <section className="mx-auto max-w-[1200px] px-5 py-16 md:px-8">
-        <h2 className="max-w-[24ch] text-[32px] font-extrabold md:text-[40px]">Three roles. Nobody gets more access than their job needs.</h2>
-        <div className="mt-10 grid gap-px overflow-hidden rounded-[20px] border border-line bg-line md:grid-cols-3">
+        <h2 className="max-w-[24ch] text-[32px] font-extrabold md:text-[40px]">Each role sees its own facility. Nobody gets more access than their job needs.</h2>
+        <div className="mt-10 grid gap-px overflow-hidden rounded-[20px] border border-line bg-line md:grid-cols-2 lg:grid-cols-3">
           {[
-            { icon: <UserCog />, role: "Admin", body: "Sets up facilities and waste categories, invites the team, assigns pickups and sees everything across the organization." },
-            { icon: <Warehouse />, role: "Facility staff", body: "Registers and labels waste at their own facilities, confirms segregation, and receives and records disposal at the plant." },
-            { icon: <Truck />, role: "Transporter", body: "Sees only their own jobs, scans containers at pickup and drop-off, and shares location while a job is active." },
+            { icon: <Hospital />, role: "Hospital staff", body: "Register and label waste at their own hospital, confirm segregation and request collection. They never see another hospital's batches." },
+            { icon: <Truck />, role: "Transporter", body: "See only the collections assigned to them — origin hospital and destination plant — scan at pickup and handover, and share location while driving." },
+            { icon: <Factory />, role: "Treatment-plant staff", body: "See waste heading to their plant, confirm receipt and custody, and record treatment or disposal." },
+            { icon: <UserCog />, role: "Organization admin", body: "Manages their organization's facilities, team, waste categories and settings, and sees its operations end to end." },
+            { icon: <ShieldCheck />, role: "Platform admin", body: "Reviews new organization registrations and approves or rejects them. A separate role from any organization's admin." },
+            { icon: <BadgeCheck />, role: "Approval first", body: "New organizations stay pending until approved, so only reviewed hospitals, plants and transport operators can operate." },
           ].map((r) => (
             <div key={r.role} className="bg-paper p-7">
               <div className="flex items-center gap-3 text-emerald-700 [&_svg]:size-5">
@@ -152,23 +197,6 @@ export default function Landing() {
               <p className="mt-3 text-ink-2">{r.body}</p>
             </div>
           ))}
-        </div>
-      </section>
-
-      <section className="mx-auto max-w-[1200px] px-5 pb-20 md:px-8">
-        <div className="grid gap-8 rounded-[24px] bg-ink p-8 text-white md:grid-cols-[1fr_auto] md:items-center md:p-12">
-          <div>
-            <div className="flex items-center gap-2 text-lime">
-              <ShieldCheck className="size-5" />
-              <span className="font-semibold">Plain about its limits</span>
-            </div>
-            <p className="mt-3 max-w-[62ch] text-[16px] text-white/80">
-              BWTS keeps accurate records; it doesn't certify compliance. Waste categories and alert thresholds are yours to configure for your jurisdiction. GPS follows the transporter's device, not the bag. RFID tags work once you connect a reader.
-            </p>
-          </div>
-          <Link to={signedIn ? "/dashboard" : "/signup"} className="inline-flex h-12 items-center justify-center rounded-[12px] bg-lime px-6 font-semibold text-ink hover:bg-[#b8e81f]">
-            {signedIn ? "Back to work" : "Create your workspace"}
-          </Link>
         </div>
       </section>
 

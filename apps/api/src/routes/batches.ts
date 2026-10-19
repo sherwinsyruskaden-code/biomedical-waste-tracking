@@ -23,11 +23,13 @@ import {
 } from "../db/schema.js";
 import { audit } from "../lib/audit.js";
 import { humanCode } from "../lib/crypto.js";
+import { orgTimezone, resolveRange } from "../lib/dates.js";
 import { badRequest, forbidden, invalidTransition, notFound } from "../lib/errors.js";
 import { publish } from "../lib/events.js";
 import { actorOf, route, zId, zOptionalText, zPage, type Actor } from "../lib/http.js";
 import { createQrIdentifier, qrPayload } from "../services/identification.js";
 import { actionNames, availableActions, canView, performAction, transporterHadBatch, visibilityFilter } from "../services/lifecycle.js";
+import { collectionDestination, requestCollection } from "../services/assignments.js";
 import { readSettings } from "../services/settings.js";
 
 export const router = Router();
@@ -44,23 +46,20 @@ const batchCreate = z.object({
   containerCount: z.number().int().min(1).max(50).default(1),
   containerType: zOptionalText(80),
   sourceArea: zOptionalText(120),
-  destinationFacilityId: zId.nullable().optional(),
   segregationNotes: zOptionalText(2000),
   handlingNotes: zOptionalText(2000),
 });
 
-async function validateRefs(actor: Actor, b: { originFacilityId: string; categoryId: string; destinationFacilityId?: string | null }) {
+/**
+ * Batches are registered without a destination: it is set when collection is requested, from the
+ * organization's configured treatment plant (see services/assignments.ts › requestCollection).
+ */
+async function validateRefs(actor: Actor, b: { originFacilityId: string; categoryId: string }) {
   const [o] = await db.select().from(facilities).where(and(eq(facilities.id, b.originFacilityId), eq(facilities.organizationId, actor.orgId), eq(facilities.active, true)));
   if (!o) throw badRequest("Origin facility not found.", { fields: { originFacilityId: "Not found" } });
   if (actor.role === "facility_staff" && !actor.facilityIds.includes(o.id)) throw forbidden("You can only register waste at facilities you are assigned to.");
   const [c] = await db.select().from(wasteCategories).where(and(eq(wasteCategories.id, b.categoryId), eq(wasteCategories.organizationId, actor.orgId), eq(wasteCategories.active, true)));
   if (!c) throw badRequest("Waste category not found.", { fields: { categoryId: "Not found" } });
-  if (b.destinationFacilityId) {
-    if (b.destinationFacilityId === o.id) throw badRequest("Destination must differ from the origin facility.");
-    const [d] = await db.select().from(facilities).where(and(eq(facilities.id, b.destinationFacilityId), eq(facilities.organizationId, actor.orgId), eq(facilities.active, true)));
-    if (!d) throw badRequest("Destination facility not found.");
-    if (!d.canReceive) throw badRequest(`${d.name} is not authorised to receive waste.`);
-  }
   return { origin: o, category: c };
 }
 
@@ -84,7 +83,6 @@ route(router, base, { method: "post", path: "/batches", summary: "Register a new
           organizationId: a.orgId,
           trackingCode,
           originFacilityId: b.originFacilityId,
-          destinationFacilityId: b.destinationFacilityId ?? null,
           categoryId: b.categoryId,
           quantity: b.quantity,
           unit: b.unit,
@@ -129,8 +127,9 @@ const listQuery = zPage.extend({
   categoryId: zId.optional(),
   facilityId: zId.optional(),
   assignmentId: zId.optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
+  /** Calendar days (YYYY-MM-DD) in the organization's timezone; validated by resolveRange. */
+  from: z.string().trim().max(40).optional(),
+  to: z.string().trim().max(40).optional(),
   assignable: z.enum(["true"]).optional(),
   sort: z.enum(["newest", "oldest"]).default("newest"),
 });
@@ -138,6 +137,7 @@ const listQuery = zPage.extend({
 route(router, base, { method: "get", path: "/batches", summary: "Search and filter batches (paginated)", tag: "Batches", access: "member", query: listQuery }, async (ctx) => {
   const a = actorOf(ctx);
   const q = ctx.query;
+  const range = resolveRange({ from: q.from, to: q.to }, await orgTimezone(a.orgId));
   const statuses = q.status?.split(",").filter((s): s is (typeof batchStatusEnum.enumValues)[number] => (batchStatusEnum.enumValues as readonly string[]).includes(s));
   const where = and(
     eq(wasteBatches.organizationId, a.orgId),
@@ -147,8 +147,8 @@ route(router, base, { method: "get", path: "/batches", summary: "Search and filt
     q.categoryId ? eq(wasteBatches.categoryId, q.categoryId) : undefined,
     q.facilityId ? or(eq(wasteBatches.originFacilityId, q.facilityId), eq(wasteBatches.destinationFacilityId, q.facilityId)) : undefined,
     q.assignmentId ? eq(wasteBatches.currentAssignmentId, q.assignmentId) : undefined,
-    q.from ? gte(wasteBatches.createdAt, q.from) : undefined,
-    q.to ? lte(wasteBatches.createdAt, q.to) : undefined,
+    range.from ? gte(wasteBatches.createdAt, range.from) : undefined,
+    range.to ? lte(wasteBatches.createdAt, range.to) : undefined,
     q.assignable ? and(eq(wasteBatches.status, "segregated"), isNull(wasteBatches.currentAssignmentId)) : undefined,
   );
   const items = await db
@@ -283,7 +283,35 @@ route(router, base, { method: "get", path: "/batches/:batchId", summary: "Batch 
     currentAssignment,
     assignmentHistory: history,
     availableActions: availableActions({ batch, actor: a, assignment }),
+    collectionRequest: await collectionPreview(a, batch),
   };
+});
+
+/** Whether this user can request collection now, and where the waste would go. */
+async function collectionPreview(a: Actor, batch: typeof wasteBatches.$inferSelect) {
+  const atOrigin = a.role === "admin" || (a.role === "facility_staff" && a.facilityIds.includes(batch.originFacilityId));
+  if (!atOrigin || batch.currentAssignmentId || !["generated", "segregated"].includes(batch.status)) return null;
+  const reason = batch.status === "generated" ? "Verify segregation first." : null;
+  try {
+    const plant = await collectionDestination(a, batch);
+    return { enabled: !reason, reason, destination: { id: plant.id, name: plant.name } };
+  } catch (err) {
+    return { enabled: false, reason: (err as Error).message, destination: null };
+  }
+}
+
+route(router, base, {
+  method: "post",
+  path: "/batches/:batchId/request-collection",
+  summary: "Hospital staff: request collection of a segregated batch. Goes to the configured treatment plant; a transporter is assigned and must accept.",
+  tag: "Lifecycle",
+  access: "member",
+  roles: ["admin", "facility_staff"],
+  body: z.object({ notes: zOptionalText(1000) }),
+}, async (ctx) => {
+  const asg = await requestCollection(actorOf(ctx), ctx.params.batchId, ctx.body);
+  ctx.res.status(201);
+  return asg;
 });
 
 route(router, base, {
@@ -303,16 +331,16 @@ route(router, base, {
     if (a.role === "facility_staff" && !a.facilityIds.includes(batch.originFacilityId)) throw forbidden("Only origin-facility staff can edit this batch.");
     if (batch.status !== "generated") throw invalidTransition("A batch can only be edited before segregation is verified. Report an incident to correct later records.");
     if (batch.currentAssignmentId) throw invalidTransition("Remove the batch from its assignment before editing.");
-    await validateRefs(a, { originFacilityId: batch.originFacilityId, categoryId: b.categoryId, destinationFacilityId: b.destinationFacilityId });
+    await validateRefs(a, { originFacilityId: batch.originFacilityId, categoryId: b.categoryId });
     const changes: Record<string, { from: unknown; to: unknown }> = {};
-    for (const k of ["categoryId", "quantity", "unit", "containerType", "sourceArea", "destinationFacilityId", "segregationNotes", "handlingNotes"] as const) {
+    for (const k of ["categoryId", "quantity", "unit", "containerType", "sourceArea", "segregationNotes", "handlingNotes"] as const) {
       const before = batch[k] ?? null;
       const after = (b as Record<string, unknown>)[k] ?? null;
       if (before !== after) changes[k] = { from: before, to: after };
     }
     const [u] = await tx
       .update(wasteBatches)
-      .set({ ...b, destinationFacilityId: b.destinationFacilityId ?? null, updatedAt: new Date(), version: sql`${wasteBatches.version} + 1` })
+      .set({ ...b, updatedAt: new Date(), version: sql`${wasteBatches.version} + 1` })
       .where(eq(wasteBatches.id, batch.id))
       .returning();
     if (Object.keys(changes).length) {

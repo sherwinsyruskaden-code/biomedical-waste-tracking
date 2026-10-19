@@ -1,13 +1,14 @@
 import "./styles/index.css";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, Suspense, lazy, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, Navigate, RouterProvider, useLocation } from "react-router";
-import { Toaster } from "sonner";
+import { Toaster, toast } from "sonner";
 import { ApiError } from "./lib/api";
 import { useMe } from "./lib/session";
 import { AppShell } from "./components/AppShell";
 import { LoadingBlock } from "./components/ui";
+import { SignedInNotice } from "./components/SignedInNotice";
 import { NotFound, RouteError } from "./pages/NotFound";
 
 // Screens load on demand to keep the first download small.
@@ -33,10 +34,24 @@ const ScanResolver = lazy(() => import("./pages/Scan").then((m) => ({ default: m
 const Login = lazy(() => import("./pages/auth/Login").then((m) => ({ default: m.Login })));
 const ForgotPassword = lazy(() => import("./pages/auth/Login").then((m) => ({ default: m.ForgotPassword })));
 const ResetPassword = lazy(() => import("./pages/auth/Login").then((m) => ({ default: m.ResetPassword })));
+const DemoLabels = lazy(() => import("./pages/DemoLabels"));
 const Tracking = lazy(() => import("./pages/Tracking"));
 const Reports = lazy(() => import("./pages/Reports"));
+const Platform = lazy(() => import("./pages/Platform"));
+const PendingApproval = lazy(() => import("./pages/PendingApproval"));
+const EnterInvite = lazy(() => import("./pages/auth/AcceptInvite").then((m) => ({ default: m.EnterInvite })));
 
-const queryClient = new QueryClient({
+/** The session ended (expired, signed out elsewhere) while the app was open: go back to sign-in instead of showing errors everywhere. */
+function onApiError(err: unknown) {
+  if (err instanceof ApiError && err.status === 401 && err.code === "unauthorized" && queryClient.getQueryData(["me"])) {
+    queryClient.setQueryData(["me"], null); // RequireMember then redirects to /login?next=<this page>
+    toast.error("Your session has ended. Please sign in again.", { id: "session-ended" });
+  }
+}
+
+const queryClient: QueryClient = new QueryClient({
+  queryCache: new QueryCache({ onError: onApiError }),
+  mutationCache: new MutationCache({ onError: onApiError }),
   defaultOptions: {
     queries: {
       retry: (count, err) => !(err instanceof ApiError && err.status >= 400 && err.status < 500) && count < 2,
@@ -53,13 +68,23 @@ function FullPageLoading() {
   );
 }
 
-/** Signed in with an active organization membership. */
+/** Signed in with an active membership of an APPROVED organization. */
 function RequireMember({ children }: { children: ReactNode }) {
   const { data, isLoading } = useMe();
   const loc = useLocation();
   if (isLoading) return <FullPageLoading />;
   if (!data) return <Navigate to={`/login?next=${encodeURIComponent(loc.pathname + loc.search)}`} replace />;
-  if (!data.membership) return <Navigate to="/onboarding" replace />;
+  if (!data.membership) return <Navigate to={data.user.isPlatformAdmin ? "/platform" : "/onboarding"} replace />;
+  if (data.membership.orgStatus !== "approved") return <PendingApproval />; // registration under platform review (or rejected)
+  return <>{children}</>;
+}
+
+/** Platform administrators only (organization review). */
+function RequirePlatformAdmin({ children }: { children: ReactNode }) {
+  const { data, isLoading } = useMe();
+  if (isLoading) return <FullPageLoading />;
+  if (!data) return <Navigate to="/login?next=%2Fplatform" replace />;
+  if (!data.user.isPlatformAdmin) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
 }
 
@@ -70,11 +95,19 @@ function RequireUser({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * Sign-in and sign-up pages stay reachable while signed in (a stale session must never hide them).
+ * A slim notice says who is signed in; submitting either form replaces that session.
+ */
 function PublicOnly({ children }: { children: ReactNode }) {
   const { data, isLoading } = useMe();
   if (isLoading) return <FullPageLoading />;
-  if (data?.membership) return <Navigate to="/dashboard" replace />;
-  return <>{children}</>;
+  return (
+    <>
+      {data?.membership && <SignedInNotice name={data.user.fullName} />}
+      {children}
+    </>
+  );
 }
 
 const lazyPage = (node: ReactNode) => <Suspense fallback={<LoadingBlock rows={6} />}>{node}</Suspense>;
@@ -85,7 +118,9 @@ const router = createBrowserRouter([
   { path: "/signup", element: <PublicOnly><Signup /></PublicOnly> },
   { path: "/forgot-password", element: <ForgotPassword /> },
   { path: "/reset-password", element: <ResetPassword /> },
+  { path: "/invite", element: <EnterInvite /> },
   { path: "/invite/:token", element: <AcceptInvite /> },
+  { path: "/platform", element: <RequirePlatformAdmin><Platform /></RequirePlatformAdmin>, errorElement: <RouteError /> },
   { path: "/terms", element: <Terms /> },
   { path: "/onboarding", element: <RequireUser><Onboarding /></RequireUser> },
   { path: "/s/:token", element: <RequireMember><ScanResolver /></RequireMember> },
@@ -104,6 +139,7 @@ const router = createBrowserRouter([
       { path: "/batches/:id/edit", element: <BatchForm /> },
       { path: "/batches/:id/labels", element: <Labels /> },
       { path: "/scan", element: <Scan /> },
+      { path: "/demo-labels", element: <DemoLabels /> },
       { path: "/tracking", element: lazyPage(<Tracking />) },
       { path: "/assignments", element: <Assignments /> },
       { path: "/assignments/:id", element: <AssignmentDetail /> },

@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import clsx from "clsx";
 import { AlertTriangle, Loader2, X } from "lucide-react";
-import { forwardRef, useId, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { forwardRef, useEffect, useId, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { ApiError } from "../lib/api";
 import { statusMeta } from "../lib/format";
 import type { BatchStatus } from "../lib/types";
@@ -23,7 +23,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLBut
         ref={ref}
         disabled={disabled || loading}
         className={clsx(
-          "inline-flex items-center justify-center gap-2 rounded-[10px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-55 select-none whitespace-nowrap",
+          "inline-flex items-center justify-center gap-2 rounded-[10px] font-semibold transition-[color,background-color,border-color,box-shadow,transform] duration-150 motion-safe:active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-55 select-none whitespace-nowrap",
           size === "sm" && "h-8 px-3 text-[13px]",
           size === "md" && "h-10 px-4 text-sm",
           size === "lg" && "h-12 px-6 text-[15px]",
@@ -111,10 +111,17 @@ export function Badge({ tone = "neutral", children, className, dot }: { tone?: T
 
 export function StatusBadge({ status }: { status: BatchStatus }) {
   const m = statusMeta[status];
+  const prev = useRef(status);
+  const changed = prev.current !== status; // pops when live data moves a batch to a new stage, not on first paint
+  useEffect(() => {
+    prev.current = status;
+  }, [status]);
   return (
-    <Badge tone={m.tone} dot>
-      {m.label}
-    </Badge>
+    <span className={clsx("inline-flex", changed && "animate-badge-in")}>
+      <Badge tone={m.tone} dot>
+        {m.label}
+      </Badge>
+    </span>
   );
 }
 

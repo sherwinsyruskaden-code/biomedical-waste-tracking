@@ -39,6 +39,8 @@ export const orgTypeEnum = pgEnum("org_type", [
   "health_network",
   "other",
 ]);
+/** Platform review of a newly registered organization. Only "approved" organizations can operate. */
+export const orgStatusEnum = pgEnum("org_status", ["pending", "approved", "rejected"]);
 export const facilityTypeEnum = pgEnum("facility_type", [
   "generator", // hospital / clinic / lab producing waste
   "storage", // intermediate storage area
@@ -131,6 +133,8 @@ export const users = pgTable(
     fullName: text("full_name").notNull(),
     passwordHash: text("password_hash").notNull(),
     phone: text("phone"),
+    /** Reviews organization registrations. Granted only from the server CLI — never through the API. */
+    isPlatformAdmin: boolean("is_platform_admin").notNull().default(false),
     lastLoginAt: ts("last_login_at"),
     createdAt: createdAt(),
     updatedAt: ts("updated_at").notNull().defaultNow(),
@@ -149,9 +153,16 @@ export const organizations = pgTable("organizations", {
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   /** Operational thresholds — see services/settings.ts for defaults & documentation. */
   settings: jsonb("settings").notNull().default(sql`'{}'::jsonb`),
+  /** New registrations start pending; a platform administrator approves or rejects them. */
+  status: orgStatusEnum("status").notNull().default("pending"),
+  applicantUserId: uuid("applicant_user_id").references((): any => users.id, { onDelete: "set null" }),
+  submittedAt: ts("submitted_at").notNull().defaultNow(),
+  reviewedAt: ts("reviewed_at"),
+  reviewedById: uuid("reviewed_by_id").references((): any => users.id, { onDelete: "set null" }),
+  reviewNote: text("review_note"),
   createdAt: createdAt(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
-});
+}, (t) => [index("organizations_status_idx").on(t.status, t.submittedAt)]);
 
 export const sessions = pgTable(
   "sessions",
@@ -661,4 +672,5 @@ export const auditLogs = pgTable(
 
 export type BatchStatus = (typeof batchStatusEnum.enumValues)[number];
 export type Role = (typeof roleEnum.enumValues)[number];
+export type OrgStatus = (typeof orgStatusEnum.enumValues)[number];
 export type AssignmentStatus = (typeof assignmentStatusEnum.enumValues)[number];

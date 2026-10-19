@@ -1,4 +1,6 @@
-# RFID / NFC hardware
+# RFID / NFC hardware (backend only)
+
+> **The web UI is QR-only.** The RFID reader tab, Web NFC scan and manual code entry were removed from the interface, and the tag-registration dialog was removed from batch detail. The backend endpoints, tables and resolver described below remain and are tested only through the API (no hardware). Re-adding a UI would be a front-end task.
 
 **Status:** the software side is implemented; **no physical RFID reader or NFC tag was available, so these paths have not been tested with hardware.** QR scanning with a phone or laptop camera is the fully working, tested path.
 

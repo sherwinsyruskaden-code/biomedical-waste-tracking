@@ -1,10 +1,10 @@
 import type { Request, Response, Router } from "express";
 import { z, type ZodType } from "zod";
-import type { Role } from "../db/schema.js";
-import { badRequest, forbidden, unauthorized } from "./errors.js";
+import type { OrgStatus, Role } from "../db/schema.js";
+import { AppError, badRequest, forbidden, unauthorized } from "./errors.js";
 
 export interface AuthContext {
-  user: { id: string; email: string; fullName: string };
+  user: { id: string; email: string; fullName: string; isPlatformAdmin: boolean };
   sessionId: string;
   /** Present when the user has an active membership in the selected organization. */
   membership: {
@@ -12,6 +12,8 @@ export interface AuthContext {
     organizationId: string;
     role: Role;
     facilityIds: string[];
+    /** Operational routes are refused until a platform administrator approves the organization. */
+    orgStatus: OrgStatus;
   } | null;
 }
 
@@ -21,7 +23,8 @@ declare module "express-serve-static-core" {
   }
 }
 
-export type Access = "public" | "user" | "member";
+/** "platform" = signed-in platform administrator (reviews organization registrations; not an org role). */
+export type Access = "public" | "user" | "member" | "platform";
 
 export interface RouteSpec<B extends ZodType | undefined, Q extends ZodType | undefined> {
   method: "get" | "post" | "patch" | "put" | "delete";
@@ -89,9 +92,16 @@ export function route<B extends ZodType | undefined = undefined, Q extends ZodTy
       if (k.toLowerCase().endsWith("id") && typeof v === "string" && !uuidRe.test(v)) throw badRequest(`Invalid ${k}.`);
     }
     if (spec.access !== "public" && !req.auth) throw unauthorized();
+    if (spec.access === "platform" && !req.auth!.user.isPlatformAdmin) throw forbidden("Only platform administrators can do this.");
     if (spec.access === "member") {
-      if (!req.auth!.membership) throw forbidden("You are not an active member of an organization.");
-      if (spec.roles && !spec.roles.includes(req.auth!.membership.role)) throw forbidden();
+      const m = req.auth!.membership;
+      if (!m) throw forbidden("You are not an active member of an organization.");
+      if (m.orgStatus !== "approved") {
+        throw new AppError(403, `organization_${m.orgStatus}`, m.orgStatus === "pending"
+          ? "Your organization is waiting for platform approval. Operational features unlock once it is approved."
+          : "Your organization's registration was rejected, so operational features are unavailable.");
+      }
+      if (spec.roles && !spec.roles.includes(m.role)) throw forbidden();
     }
     const body = spec.body ? parse(spec.body, req.body ?? {}, "body") : undefined;
     const query = spec.query ? parse(spec.query, req.query, "query") : undefined;

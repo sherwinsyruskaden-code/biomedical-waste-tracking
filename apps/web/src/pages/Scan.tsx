@@ -11,7 +11,7 @@ import type { ActionInfo, BatchStatus } from "../lib/types";
 
 interface Resolved {
   container: { id: string; label: string };
-  batch: { id: string; trackingCode: string; status: BatchStatus; quantity: number; unit: string };
+  batch: { id: string; trackingCode: string; status: BatchStatus; quantity: number; unit: string; containerCount: number; sourceArea: string | null; category: { name: string; code: string; colorHex: string }; originName: string | null };
   availableActions: ActionInfo[];
 }
 
@@ -25,7 +25,13 @@ function ResultCard({ r, onAction }: { r: Resolved; onAction: (a: ActionInfo["ac
         <StatusBadge status={r.batch.status} />
         <span className="tabular font-semibold">{fmtQty(r.batch.quantity, r.batch.unit)}</span>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
+      <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-ink-2">
+        <span className="inline-flex items-center gap-1.5"><span className="size-3 rounded-full ring-1 ring-black/10" style={{ background: r.batch.category.colorHex }} />{r.batch.category.name}</span>
+        {r.batch.originName && <span>{r.batch.originName}{r.batch.sourceArea ? ` · ${r.batch.sourceArea}` : ""}</span>}
+        <span>{r.batch.containerCount} container{r.batch.containerCount === 1 ? "" : "s"}</span>
+      </p>
+      <p className="mt-4 text-[12.5px] font-semibold uppercase tracking-wide text-ink-3">{enabled.length ? "Next step for your role" : "Nothing for your role to do right now"}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
         {enabled.map((a) => <Button key={a.action} variant={a.action === "cancel" ? "danger" : "primary"} onClick={() => onAction(a.action)}>{a.label}</Button>)}
         <Link to={`/batches/${r.batch.id}`} className="inline-flex h-10 items-center rounded-[10px] border border-line-2 px-4 text-sm font-semibold hover:border-emerald-600">Open full record</Link>
       </div>
@@ -45,7 +51,7 @@ export function Scan() {
   const onScan = useCallback((s: ScanResult) => identify.mutate(s), [identify.mutate]); // eslint-disable-line
   return (
     <>
-      <PageHeader title="Scan a container" description="Point the camera at a BWTS label, use an RFID reader, or type the code. You'll see the batch and what you can do next." />
+      <PageHeader title="Scan a container's QR code" description="Scan the QR label on a waste container with your camera. You'll see its batch and the next step your role is allowed to take." />
       <div className="grid gap-5 lg:grid-cols-[minmax(0,560px)_1fr]">
         <Panel>
           <Scanner onResult={onScan} paused={!!dialog} />

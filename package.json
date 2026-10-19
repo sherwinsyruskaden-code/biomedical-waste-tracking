@@ -18,7 +18,12 @@
     "db:migrate": "npm run db:migrate --workspace apps/api",
     "db:seed": "npm run db:seed --workspace apps/api",
     "start": "npm run start --workspace apps/api",
-    "db:seed:reset": "npm run db:seed --workspace apps/api -- --reset"
+    "db:seed:reset": "npm run db:seed --workspace apps/api -- --reset",
+    "platform-admin": "npm run platform-admin --workspace apps/api --",
+    "test:e2e:landing": "npm run test:e2e:landing --workspace apps/web",
+    "test:e2e:scan": "npm run test:e2e:scan --workspace apps/web",
+    "test:e2e:dates": "npm run test:e2e:dates --workspace apps/web",
+    "test:e2e:motion": "npm run test:e2e:motion --workspace apps/web"
   },
   "engines": {
     "node": ">=22.9"

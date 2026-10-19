@@ -13,6 +13,7 @@ import {
   Map,
   Menu,
   PackageCheck,
+  QrCode,
   ScanLine,
   Settings,
   Truck,
@@ -23,7 +24,7 @@ import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { api } from "../lib/api";
 import { roleLabel } from "../lib/format";
-import { useActor, useLiveEvents } from "../lib/session";
+import { useActor, useLiveEvents, useWorkplace } from "../lib/session";
 import { Button, LoadingBlock } from "./ui";
 
 export function Logo({ className, inverted }: { className?: string; inverted?: boolean }) {
@@ -52,6 +53,7 @@ interface NavItem {
 
 export function AppShell() {
   const { me, role, isAdmin, isTransporter } = useActor();
+  const work = useWorkplace();
   const [navOpen, setNavOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
@@ -86,18 +88,23 @@ export function AppShell() {
     },
   });
 
+  // Each role sees only the modules its job needs.
+  const { atHospital, atPlant } = work;
+  const isStaff = role === "facility_staff";
   const items: NavItem[] = [
     { to: "/dashboard", label: "Dashboard", icon: <LayoutDashboard />, show: true },
-    { to: "/batches", label: "Waste batches", icon: <ClipboardList />, show: !isTransporter },
-    { to: "/assignments", label: isTransporter ? "My jobs" : "Transport jobs", icon: <Truck />, show: true },
-    { to: "/tracking", label: "Live map", icon: <Map />, show: true },
-    { to: "/receiving", label: "Receipt & disposal", icon: <PackageCheck />, show: !isTransporter },
+    { to: "/batches", label: "Waste batches", icon: <ClipboardList />, show: isAdmin || atHospital },
+    { to: "/receiving", label: atPlant && !isAdmin ? "Incoming & disposal" : "Receipt & disposal", icon: <PackageCheck />, show: isAdmin || atPlant },
+    { to: "/assignments", label: isTransporter ? "My collections" : isAdmin ? "Transport jobs" : atPlant && !atHospital ? "Incoming transfers" : "Collection requests", icon: <Truck />, show: true },
+    { to: "/tracking", label: "Live map", icon: <Map />, show: isAdmin || isTransporter || atPlant },
     { to: "/alerts", label: "Alerts & incidents", icon: <Inbox />, show: true, badge: openAlerts.data?.total },
     { to: "/reports", label: "Reports", icon: <FileBarChart />, show: !isTransporter },
+    { to: "/demo-labels", label: "Demo QR labels", icon: <QrCode />, show: !!me.features.demoOrg && (isTransporter || atPlant) },
     { to: "/team", label: "Team", icon: <Users />, show: isAdmin },
-    { to: "/facilities", label: "Facilities & categories", icon: <Building2 />, show: isAdmin },
+    { to: "/facilities", label: isAdmin ? "Facilities & categories" : "My facility", icon: <Building2 />, show: isAdmin || isStaff || isTransporter },
     { to: "/settings", label: "Settings", icon: <Settings />, show: true },
   ];
+  const roleName = isStaff ? (atPlant && !atHospital ? "Treatment-plant staff" : atHospital && !atPlant ? "Hospital staff" : roleLabel[role]) : roleLabel[role];
 
   const nav = (
     <nav aria-label="Main" className="flex flex-col gap-0.5">
@@ -125,7 +132,8 @@ export function AppShell() {
   const orgPanel = (
     <div className="rounded-[12px] border border-line bg-mist px-3 py-2.5">
       <p className="truncate text-[13.5px] font-semibold text-ink">{me.organization?.name}</p>
-      <p className="text-[12.5px] text-ink-3">{roleLabel[role]}</p>
+      <p className="text-[12.5px] text-ink-3">{roleName}</p>
+      {isStaff && work.name && <p className="mt-0.5 truncate text-[12.5px] font-medium text-emerald-800" title={work.name} data-testid="workplace">{work.name}</p>}
     </div>
   );
 
@@ -230,7 +238,9 @@ export function AppShell() {
         </header>
         <main id="main" className="mx-auto w-full max-w-[1320px] flex-1 px-4 py-6 md:px-8 md:py-8">
           <Suspense fallback={<LoadingBlock rows={6} />}>
-            <Outlet />
+            <div key={location.pathname} className="animate-rise-in">
+              <Outlet />
+            </div>
           </Suspense>
         </main>
       </div>

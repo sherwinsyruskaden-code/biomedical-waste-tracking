@@ -2,6 +2,9 @@ import request from "supertest";
 import type { Express } from "express";
 import { createApp } from "../src/app.js";
 import { devOutbox } from "../src/lib/mailer.js";
+import { db } from "../src/db/client.js";
+import { users } from "../src/db/schema.js";
+import { hashPassword } from "../src/routes/auth.js";
 
 export const app: Express = createApp();
 let seq = 0;
@@ -24,7 +27,26 @@ export type Client = ReturnType<typeof client>;
 
 export const PASSWORD = "Str0ng-Passw0rd!";
 
-export async function signupOrg(name = "Test Hospital") {
+let platform: Client | null = null;
+/** A platform administrator. The flag can only be set server-side, so the test writes it directly (like the CLI). */
+export async function platformAdmin() {
+  if (platform) return platform;
+  const email = `platform-${uniq()}@example.test`;
+  await db.insert(users).values({ email, fullName: "Pat Platform", passwordHash: await hashPassword(PASSWORD), isPlatformAdmin: true });
+  const c = client();
+  const r = await c.post("/api/auth/login", { email, password: PASSWORD });
+  if (r.status !== 200) throw new Error(`platform login failed ${JSON.stringify(r.body)}`);
+  platform = c;
+  return c;
+}
+
+export async function approveOrg(orgId: string) {
+  const r = await (await platformAdmin()).post(`/api/platform/organizations/${orgId}/approve`, {});
+  if (r.status !== 200) throw new Error(`approve failed ${r.status} ${JSON.stringify(r.body)}`);
+}
+
+/** Registers an organization (pending) and, unless told otherwise, has a platform admin approve it. */
+export async function signupOrg(name = "Test Hospital", { approve = true } = {}) {
   const c = client();
   const email = `admin-${uniq()}@example.test`;
   const res = await c.post("/api/auth/signup", {
@@ -37,6 +59,8 @@ export async function signupOrg(name = "Test Hospital") {
     acceptTerms: true,
   });
   if (res.status !== 201) throw new Error(`signup failed ${res.status} ${JSON.stringify(res.body)}`);
+  if (!approve) return { admin: c, email, orgId: res.body.organizationId as string, hospitalId: res.body.facilityId as string, plantId: "", categories: [] as { id: string; code: string }[] };
+  await approveOrg(res.body.organizationId);
   const plant = await c.post("/api/facilities", { name: "Green CBWTF", type: "treatment", canReceive: true, address: "Plot 9, SIPCOT, Chennai", city: "Chennai", latitude: 12.98, longitude: 80.2 });
   if (plant.status !== 201) throw new Error(`facility failed ${JSON.stringify(plant.body)}`);
   const cats = await c.get("/api/categories");

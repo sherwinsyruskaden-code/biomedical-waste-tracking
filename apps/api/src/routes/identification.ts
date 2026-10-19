@@ -1,13 +1,16 @@
 import { Router } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
+import QRCode from "qrcode";
 import { z } from "zod";
 import { db } from "../db/client.js";
-import { containerIdentifiers, containers, identifierMethodEnum, scanMethodEnum, wasteBatches } from "../db/schema.js";
+import { containerIdentifiers, containers, facilities, identifierMethodEnum, organizations, scanMethodEnum, wasteBatches, wasteCategories } from "../db/schema.js";
+import { env } from "../env.js";
 import { audit } from "../lib/audit.js";
-import { badRequest, conflict, notFound } from "../lib/errors.js";
+import { badRequest, conflict, forbidden, notFound } from "../lib/errors.js";
 import { actorOf, route, zId } from "../lib/http.js";
-import { normalizeIdentifier, resolveIdentifier } from "../services/identification.js";
-import { availableActions } from "../services/lifecycle.js";
+import { DEMO_ORG_NAME } from "../services/demo.js";
+import { normalizeIdentifier, qrPayload, resolveIdentifier } from "../services/identification.js";
+import { availableActions, performAction } from "../services/lifecycle.js";
 import { loadVisibleBatch } from "./batches.js";
 
 export const router = Router();
@@ -34,9 +37,11 @@ route(router, base, {
   // Identical response for "not registered" and "belongs to another organization".
   if (!hit) throw notFound("Label (not registered in your organization)");
   const { batch, assignment } = await loadVisibleBatch(a, hit.batchId);
+  const [category] = await db.select({ name: wasteCategories.name, code: wasteCategories.code, colorHex: wasteCategories.colorHex }).from(wasteCategories).where(eq(wasteCategories.id, batch.categoryId));
+  const [origin] = await db.select({ name: facilities.name }).from(facilities).where(eq(facilities.id, batch.originFacilityId));
   return {
     container: { id: hit.containerId, label: hit.containerLabel },
-    batch: { id: batch.id, trackingCode: batch.trackingCode, status: batch.status, quantity: batch.quantity, unit: batch.unit },
+    batch: { id: batch.id, trackingCode: batch.trackingCode, status: batch.status, quantity: batch.quantity, unit: batch.unit, containerCount: batch.containerCount, sourceArea: batch.sourceArea, category, originName: origin?.name ?? null },
     availableActions: availableActions({ batch, actor: a, assignment }),
   };
 });
@@ -108,3 +113,78 @@ route(router, base, { method: "delete", path: "/identifiers/:identifierId", summ
 
 export const scanMethods = scanMethodEnum.enumValues;
 export { zId };
+
+route(router, base, {
+  method: "get",
+  path: "/demo/labels",
+  summary: "DEMO MODE ONLY: scannable QR labels of the synthetic demo batches visible to the signed-in demo user",
+  tag: "Identification",
+  access: "member",
+}, async (ctx) => {
+  const a = actorOf(ctx);
+  const [org] = await db.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, a.orgId));
+  if (!env.DEMO_MODE || org?.name !== DEMO_ORG_NAME) throw notFound("Endpoint");
+  const batches = await db.select({ id: wasteBatches.id }).from(wasteBatches).where(eq(wasteBatches.organizationId, a.orgId)).orderBy(desc(wasteBatches.createdAt)).limit(40);
+  const out = [];
+  for (const { id } of batches) {
+    let visible;
+    try {
+      visible = await loadVisibleBatch(a, id); // same visibility rules as everywhere else (a transporter only sees their own jobs)
+    } catch {
+      continue;
+    }
+    const { batch, assignment } = visible;
+    const [category] = await db.select({ name: wasteCategories.name, code: wasteCategories.code, colorHex: wasteCategories.colorHex }).from(wasteCategories).where(eq(wasteCategories.id, batch.categoryId));
+    const [origin] = await db.select({ name: facilities.name }).from(facilities).where(eq(facilities.id, batch.originFacilityId));
+    const rows = await db
+      .select({ label: containers.label, sequence: containers.sequence, token: containerIdentifiers.value })
+      .from(containers)
+      .innerJoin(containerIdentifiers, and(eq(containerIdentifiers.containerId, containers.id), eq(containerIdentifiers.method, "qr"), eq(containerIdentifiers.active, true)))
+      .where(eq(containers.batchId, batch.id))
+      .orderBy(asc(containers.sequence));
+    out.push({
+      batchId: batch.id,
+      trackingCode: batch.trackingCode,
+      status: batch.status,
+      category,
+      originName: origin?.name ?? null,
+      quantity: batch.quantity,
+      unit: batch.unit,
+      containerCount: batch.containerCount,
+      nextActions: availableActions({ batch, actor: a, assignment }).filter((x) => x.enabled).map((x) => x.label),
+      labels: await Promise.all(rows.map(async (r) => ({ label: r.label, sequence: r.sequence, payload: qrPayload(r.token), svg: await QRCode.toString(qrPayload(r.token), { type: "svg", errorCorrectionLevel: "M", margin: 1 }) }))),
+    });
+  }
+  return { batches: out };
+});
+
+route(router, base, {
+  method: "post",
+  path: "/demo/batches/:batchId/simulate-scan",
+  summary: "DEMO MODE ONLY: perform pickup / handover with the batch's real QR label, without a camera. Recorded as a simulated scan.",
+  tag: "Identification",
+  access: "member",
+  roles: ["transporter", "admin"],
+  body: z.object({ action: z.enum(["pickup", "handover"]) }),
+}, async (ctx) => {
+  const a = actorOf(ctx);
+  const [org] = await db.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, a.orgId));
+  if (!env.DEMO_MODE || org?.name !== DEMO_ORG_NAME) throw notFound("Endpoint");
+  const { batch } = await loadVisibleBatch(a, ctx.params.batchId); // same visibility rules as a real scan
+  const [label] = await db
+    .select({ label: containers.label, token: containerIdentifiers.value })
+    .from(containers)
+    .innerJoin(containerIdentifiers, and(eq(containerIdentifiers.containerId, containers.id), eq(containerIdentifiers.method, "qr"), eq(containerIdentifiers.active, true)))
+    .where(eq(containers.batchId, batch.id))
+    .orderBy(asc(containers.sequence))
+    .limit(1);
+  if (!label) throw forbidden("This batch has no QR label to scan.");
+  // The real lifecycle action runs with the real label: role, assignment and status rules all apply.
+  const r = await performAction(a, batch.id, ctx.body.action, {
+    scanMethod: "qr",
+    identifier: qrPayload(label.token),
+    notes: "Simulated QR scan (demo mode) — no physical label was scanned.",
+  }, undefined, { simulatedScan: true });
+  await audit({ organizationId: a.orgId, actorUserId: a.userId, action: "scan.simulated", entityType: "batch", entityId: batch.id, metadata: { action: ctx.body.action, container: label.label }, ip: a.ip });
+  return { batch: { id: r.batch.id, trackingCode: r.batch.trackingCode, status: r.batch.status }, container: label.label, simulated: true };
+});

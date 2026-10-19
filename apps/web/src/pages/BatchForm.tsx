@@ -20,17 +20,16 @@ export default function BatchForm() {
   const categories = useCategories();
   const existing = useQuery({ queryKey: ["batch", id], queryFn: () => api.get<BatchDetail>(`/api/batches/${id}`), enabled: editing });
 
-  const [form, setForm] = useState({ originFacilityId: "", categoryId: "", quantity: "", unit: "kg", containerCount: "1", containerType: "", sourceArea: "", destinationFacilityId: "", segregationNotes: "", handlingNotes: "" });
+  const [form, setForm] = useState({ originFacilityId: "", categoryId: "", quantity: "", unit: "kg", containerCount: "1", containerType: "", sourceArea: "", segregationNotes: "", handlingNotes: "" });
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
   const myFacilities = (facilities.data ?? []).filter((f) => (isAdmin || facilityIds.includes(f.id)) && f.type !== "treatment");
-  const receivers = (facilities.data ?? []).filter((f) => f.canReceive);
   const activeCats = (categories.data ?? []).filter((c) => c.active);
 
   useEffect(() => {
     if (editing && existing.data) {
       const b = existing.data;
-      setForm({ originFacilityId: b.originFacilityId, categoryId: b.categoryId, quantity: String(b.quantity), unit: b.unit, containerCount: String(b.containerCount), containerType: b.containerType ?? "", sourceArea: b.sourceArea ?? "", destinationFacilityId: b.destinationFacilityId ?? "", segregationNotes: b.segregationNotes ?? "", handlingNotes: b.handlingNotes ?? "" });
+      setForm({ originFacilityId: b.originFacilityId, categoryId: b.categoryId, quantity: String(b.quantity), unit: b.unit, containerCount: String(b.containerCount), containerType: b.containerType ?? "", sourceArea: b.sourceArea ?? "", segregationNotes: b.segregationNotes ?? "", handlingNotes: b.handlingNotes ?? "" });
     }
   }, [editing, existing.data]);
   useEffect(() => {
@@ -45,7 +44,6 @@ export default function BatchForm() {
         unit: form.unit,
         containerType: form.containerType || null,
         sourceArea: form.sourceArea || null,
-        destinationFacilityId: form.destinationFacilityId || null,
         segregationNotes: form.segregationNotes || null,
         handlingNotes: form.handlingNotes || null,
       };
@@ -122,7 +120,7 @@ export default function BatchForm() {
 
           <Panel title="Where and how much">
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Generated at" htmlFor="origin" error={fe("originFacilityId")} required>
+              <Field label="Origin (where the waste was produced)" htmlFor="origin" error={fe("originFacilityId")} required>
                 <Select id="origin" value={form.originFacilityId} onChange={(e) => set("originFacilityId", e.target.value)} disabled={editing}>
                   <option value="">Choose facility…</option>
                   {(editing ? facilities.data ?? [] : myFacilities).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
@@ -149,12 +147,6 @@ export default function BatchForm() {
               </Field>
               <Field label="Container type" htmlFor="ctype">
                 <Input id="ctype" value={form.containerType} onChange={(e) => set("containerType", e.target.value)} placeholder="e.g. 20 L yellow bag, sharps box" />
-              </Field>
-              <Field label="Intended destination" htmlFor="dest" hint="Optional — set when a transport job is created." error={fe("destinationFacilityId")}>
-                <Select id="dest" value={form.destinationFacilityId} onChange={(e) => set("destinationFacilityId", e.target.value)}>
-                  <option value="">Decide later</option>
-                  {receivers.filter((r) => r.id !== form.originFacilityId).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-                </Select>
               </Field>
             </div>
           </Panel>
@@ -183,7 +175,7 @@ export default function BatchForm() {
             <Button type="submit" size="lg" loading={save.isPending} disabled={!form.categoryId || !form.quantity || !form.originFacilityId}>
               {editing ? "Save changes" : "Register & create labels"}
             </Button>
-            <p className="text-[12.5px] text-ink-3">Registering starts the custody record with you as the responsible person.</p>
+            <p className="text-[12.5px] text-ink-3">Registering starts the custody record with you as the responsible person. The destination is set when you request collection: your organization's authorised treatment plant.</p>
           </div>
         </aside>
       </form>

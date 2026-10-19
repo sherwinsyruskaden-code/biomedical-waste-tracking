@@ -3,7 +3,8 @@ import clsx from "clsx";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { toast } from "sonner";
-import { Button, ErrorState, Field, FormError, Input, LoadingBlock, PageHeader, Pagination, Panel, fieldError } from "../components/ui";
+import { Button, ErrorState, Field, FormError, Input, LoadingBlock, PageHeader, Pagination, Panel, Select, fieldError } from "../components/ui";
+import { useFacilities } from "../lib/queries";
 import { api, qs } from "../lib/api";
 import { fmtDateTime, humanize } from "../lib/format";
 import { useActor } from "../lib/session";
@@ -17,7 +18,7 @@ interface Org {
   contactPhone: string | null;
   address: string | null;
   timezone: string;
-  settings: Record<string, number>;
+  settings: Record<string, number | string | null>;
 }
 
 function Account() {
@@ -87,7 +88,8 @@ function Thresholds({ org }: { org: Org }) {
   const qc = useQueryClient();
   const [v, setV] = useState<Record<string, string>>({});
   useEffect(() => setV(Object.fromEntries(thresholdFields.map((f) => [f.key, String(org.settings[f.key] ?? "")]))), [org]);
-  const m = useMutation({ mutationFn: () => api.put("/api/organization/settings", Object.fromEntries(Object.entries(v).map(([k, x]) => [k, Number(x)]))), onSuccess: () => { toast.success("Thresholds saved"); qc.invalidateQueries({ queryKey: ["organization"] }); } });
+  // Send the whole settings object so saving thresholds keeps the default treatment plant.
+  const m = useMutation({ mutationFn: () => api.put("/api/organization/settings", { ...org.settings, ...Object.fromEntries(Object.entries(v).map(([k, x]) => [k, Number(x)])) }), onSuccess: () => { toast.success("Thresholds saved"); qc.invalidateQueries({ queryKey: ["organization"] }); } });
   return (
     <Panel title="Alert thresholds & retention">
       <p className="mb-5 max-w-[75ch] text-sm text-ink-2">The defaults are operational suggestions, not legal limits. Set them to match the rules and authorisation that apply to your organization. The background check runs every minute.</p>
@@ -99,6 +101,33 @@ function Thresholds({ org }: { org: Org }) {
         ))}
         <div className="md:col-span-2"><FormError error={m.error} /></div>
         <Button type="submit" loading={m.isPending} className="self-start">Save thresholds</Button>
+      </form>
+    </Panel>
+  );
+}
+
+/** Where hospital staff's collection requests are delivered. */
+function CollectionDestination({ org }: { org: Org }) {
+  const qc = useQueryClient();
+  const facilities = useFacilities();
+  const plants = (facilities.data ?? []).filter((f) => f.canReceive);
+  const [plant, setPlant] = useState(String(org.settings.defaultTreatmentFacilityId ?? ""));
+  useEffect(() => setPlant(String(org.settings.defaultTreatmentFacilityId ?? "")), [org]);
+  const m = useMutation({
+    mutationFn: () => api.put("/api/organization/settings", { ...org.settings, defaultTreatmentFacilityId: plant || null }),
+    onSuccess: () => { toast.success("Default treatment plant saved"); qc.invalidateQueries({ queryKey: ["organization"] }); qc.invalidateQueries({ queryKey: ["batch"] }); },
+  });
+  return (
+    <Panel title="Collection destination" className="mt-5">
+      <form onSubmit={(e) => { e.preventDefault(); m.mutate(); }} className="flex flex-col gap-4">
+        <Field label="Default treatment plant" htmlFor="dtp" hint="Collection requests from your hospitals go here. Leave on automatic if you have exactly one authorised plant." error={fieldError(m.error, "defaultTreatmentFacilityId")}>
+          <Select id="dtp" value={plant} onChange={(e) => setPlant(e.target.value)} className="max-w-[420px]">
+            <option value="">Automatic (the only authorised treatment plant)</option>
+            {plants.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+          </Select>
+        </Field>
+        <FormError error={m.error} />
+        <Button type="submit" loading={m.isPending} className="self-start">Save destination</Button>
       </form>
     </Panel>
   );
@@ -148,7 +177,7 @@ export default function Settings() {
       {tab === "account" && <Account />}
       {tab !== "account" && (org.isLoading ? <LoadingBlock /> : org.isError ? <ErrorState error={org.error} /> : (
         <>
-          {tab === "organization" && <Organization org={org.data!} />}
+          {tab === "organization" && <><Organization org={org.data!} /><CollectionDestination org={org.data!} /></>}
           {tab === "thresholds" && <Thresholds org={org.data!} />}
           {tab === "audit" && <AuditLog />}
         </>

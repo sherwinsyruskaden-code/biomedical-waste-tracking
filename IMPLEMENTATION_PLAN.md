@@ -30,7 +30,7 @@ Legend: ✅ done and verified · ⚠️ done, verification limited (reason given
 - ✅ Receipt (accept/reject, weight & condition incidents), disposal (category-allowed methods), reroute of rejected loads
 - ✅ Incidents and resolution
 - ✅ QR labels (opaque tokens, printable sheet), camera scanner, `/s/:token` deep link
-- ⚠️ RFID (keyboard-wedge) and Web NFC scan paths + tag registry implemented; **not tested with hardware**
+- ⚠️ RFID/NFC: backend only (UI removed, QR-only); **never tested with hardware**
 - ⬜ Fixed-reader gateway and API keys for devices
 
 ## Phase 9 — GPS & map
@@ -48,7 +48,7 @@ Legend: ✅ done and verified · ⚠️ done, verification limited (reason given
 - ⬜ Email notifications for alerts
 
 ## Phase 11–12 — Security & testing
-- ✅ 29 API integration tests against real PostgreSQL (`npm test`)
+- ✅ 60 API integration tests against real PostgreSQL (`npm test`)
 - ✅ 16-step browser E2E acceptance test (`npm run test:e2e`), passing against dev server and production build
 - ✅ Production build, type checks, migrations, restart persistence, backup/restore round trip
 - ⚠️ `docker-compose.yml` and `Dockerfile` written but not executed (no Docker daemon in the build environment)

@@ -5,6 +5,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import { Button, Field, FormError, Input, fieldError } from "../../components/ui";
 import { api } from "../../lib/api";
 import { AuthLayout } from "./AuthLayout";
+import { DemoLogin } from "../../components/DemoLogin";
 
 const safeNext = (n: string | null) => (n && n.startsWith("/") && !n.startsWith("//") ? n : "/dashboard");
 
@@ -26,7 +27,7 @@ export function Login() {
     login.mutate();
   };
   return (
-    <AuthLayout title="Sign in" subtitle={<>New organization? <Link to="/signup" className="font-semibold text-emerald-700 underline-offset-2 hover:underline">Create one</Link></>}>
+    <AuthLayout title="Sign in" subtitle={<>No account yet? <Link to="/signup" className="font-semibold text-emerald-700 underline-offset-2 hover:underline">Create an account</Link></>}>
       <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
         <FormError error={login.error} />
         <Field label="Work email" htmlFor="email" error={fieldError(login.error, "email")}>
@@ -43,8 +44,9 @@ export function Login() {
         <Button type="submit" size="lg" loading={login.isPending}>
           Sign in
         </Button>
-        <p className="text-[13px] text-ink-3">Joining a team? Open the invitation link your admin sent you.</p>
+        <p className="text-[13px] text-ink-3">Already have an invitation? <Link to="/invite" className="font-semibold text-emerald-700 hover:underline">Accept invitation</Link></p>
       </form>
+      <DemoLogin />
     </AuthLayout>
   );
 }

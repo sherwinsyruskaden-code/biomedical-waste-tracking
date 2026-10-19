@@ -1,8 +1,9 @@
 import { Router } from "express";
-import { and, asc, count, desc, eq, gt, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import {
+  assignments,
   auditLogs,
   facilities,
   invitations,
@@ -19,7 +20,7 @@ import { env } from "../env.js";
 import { audit } from "../lib/audit.js";
 import { randomToken, sha256 } from "../lib/crypto.js";
 import { badRequest, conflict, forbidden, notFound } from "../lib/errors.js";
-import { actorOf, route, zId, zOptionalText, zPage } from "../lib/http.js";
+import { actorOf, route, zId, zOptionalText, zPage, type Actor } from "../lib/http.js";
 import { mailConfigured, sendMail } from "../lib/mailer.js";
 import { createSession } from "../lib/session.js";
 import { assertFacilitiesInOrg, facilityInput } from "../services/orgs.js";
@@ -65,22 +66,59 @@ route(router, base, {
   return { ok: true };
 });
 
-route(router, base, { method: "put", path: "/organization/settings", summary: "Update operational thresholds", tag: "Organization", access: "member", roles: ["admin"], body: orgSettingsSchema }, async (ctx) => {
+route(router, base, { method: "put", path: "/organization/settings", summary: "Update operational thresholds and the default treatment plant", tag: "Organization", access: "member", roles: ["admin"], body: orgSettingsSchema }, async (ctx) => {
   const a = actorOf(ctx);
+  if (ctx.body.defaultTreatmentFacilityId) {
+    const [f] = await db.select().from(facilities).where(and(eq(facilities.id, ctx.body.defaultTreatmentFacilityId), eq(facilities.organizationId, a.orgId), eq(facilities.active, true)));
+    if (!f?.canReceive) throw badRequest("Choose an active facility of yours that is authorised to receive waste.", { fields: { defaultTreatmentFacilityId: "Not a receiving facility" } });
+  }
   await db.update(organizations).set({ settings: ctx.body, updatedAt: new Date() }).where(eq(organizations.id, a.orgId));
   await audit({ organizationId: a.orgId, actorUserId: a.userId, action: "organization.settings_update", metadata: ctx.body, ip: a.ip });
   return ctx.body;
 });
 
 // ------------------------------------------------------------------ facilities
-route(router, base, { method: "get", path: "/facilities", summary: "List facilities", tag: "Facilities", access: "member", query: z.object({ includeInactive: z.enum(["true", "false"]).optional() }) }, async (ctx) => {
-  const a = actorOf(ctx);
-  const rows = await db
+/**
+ * Facilities a member may see, and how:
+ *  - "managed": admins see and manage every facility of their organization;
+ *  - "own":     staff see the facilities they are assigned to;
+ *  - "partner": the other end of a transfer they are part of (a hospital's treatment plant, a plant's
+ *               sending hospitals, a transporter's pickup and drop-off) — contact and location only.
+ */
+async function visibleFacilities(a: Actor, includeInactive: boolean) {
+  const all = await db
     .select()
     .from(facilities)
-    .where(and(eq(facilities.organizationId, a.orgId), ctx.query.includeInactive === "true" ? undefined : eq(facilities.active, true)))
+    .where(and(eq(facilities.organizationId, a.orgId), includeInactive && a.role === "admin" ? undefined : eq(facilities.active, true)))
     .orderBy(asc(facilities.name));
-  return rows;
+  if (a.role === "admin") return all.map((f) => ({ ...f, access: "managed" as const }));
+  const own = new Set(a.role === "facility_staff" ? a.facilityIds : []);
+  const scope =
+    a.role === "transporter"
+      ? eq(assignments.transporterUserId, a.userId)
+      : own.size
+        ? or(inArray(assignments.originFacilityId, [...own]), inArray(assignments.destinationFacilityId, [...own]))
+        : sql`false`;
+  const legs = await db.select({ o: assignments.originFacilityId, d: assignments.destinationFacilityId }).from(assignments).where(and(eq(assignments.organizationId, a.orgId), scope));
+  const partners = new Set(legs.flatMap((l) => [l.o, l.d]).filter((id) => !own.has(id)));
+  if (own.size) {
+    // Staff at a generating facility also see where their waste will go when they request collection.
+    const [org] = await db.select({ settings: organizations.settings }).from(organizations).where(eq(organizations.id, a.orgId));
+    const plantId = readSettings(org.settings).defaultTreatmentFacilityId;
+    const generating = all.some((f) => own.has(f.id) && f.type !== "treatment");
+    if (generating) for (const f of all) if ((plantId ? f.id === plantId : f.type === "treatment" && f.canReceive) && !own.has(f.id)) partners.add(f.id);
+  }
+  return all
+    .filter((f) => own.has(f.id) || partners.has(f.id))
+    .map((f) =>
+      own.has(f.id)
+        ? { ...f, access: "own" as const }
+        : { id: f.id, name: f.name, type: f.type, canReceive: f.canReceive, address: f.address, city: f.city, contactName: f.contactName, contactPhone: f.contactPhone, latitude: f.latitude, longitude: f.longitude, active: f.active, access: "partner" as const },
+    );
+}
+
+route(router, base, { method: "get", path: "/facilities", summary: "Facilities you may see: all (admin), your own, and transfer partners (contact and location only)", tag: "Facilities", access: "member", query: z.object({ includeInactive: z.enum(["true", "false"]).optional() }) }, async (ctx) => {
+  return visibleFacilities(actorOf(ctx), ctx.query.includeInactive === "true");
 });
 
 route(router, base, { method: "post", path: "/facilities", summary: "Create facility", tag: "Facilities", access: "member", roles: ["admin"], body: facilityInput }, async (ctx) => {
@@ -179,9 +217,10 @@ route(router, base, { method: "get", path: "/members", summary: "List organizati
     .innerJoin(users, eq(users.id, memberships.userId))
     .where(and(eq(memberships.organizationId, a.orgId), ctx.query.role ? eq(memberships.role, ctx.query.role) : undefined))
     .orderBy(asc(users.fullName));
-  // Non-admins only need names/roles (e.g. to pick a transporter); hide contact details.
-  if (a.role !== "admin") return rows.map(({ email: _e, phone: _p, lastLoginAt: _l, ...r }) => r);
-  return rows;
+  if (a.role === "admin") return rows;
+  // Staff see only colleagues at their own facilities; transporters see only themselves. No contact details.
+  const mine = rows.filter((r) => r.userId === a.userId || (a.role === "facility_staff" && r.facilityIds.some((f) => a.facilityIds.includes(f))));
+  return mine.map(({ email: _e, phone: _p, lastLoginAt: _l, ...r }) => r);
 });
 
 route(router, base, {
