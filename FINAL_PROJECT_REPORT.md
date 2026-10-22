@@ -27,7 +27,7 @@ Key design decisions:
 2. **One source of truth for permissions**: the same `check` functions decide what the UI offers and what the API accepts.
 3. **QR codes carry no data**, only a 144-bit random token, so a photographed label leaks nothing.
 4. **Honesty about data provenance**: device GPS vs simulated positions are stored and drawn differently; planned routes are labelled as estimates; alerts are described as operational signals, not regulatory findings.
-5. **Boring infrastructure**: no Redis, queues or microservices — PostgreSQL holds all state; the system runs on a laptop.
+5. **Boring infrastructure**: Redis is only an optional session-lookup cache, with no queues or microservices — PostgreSQL holds all state; the system runs on a laptop.
 
 ## 4. Implementation size
 

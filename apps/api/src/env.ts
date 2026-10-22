@@ -20,6 +20,8 @@ const schema = z.object({
   ROUTING_URL: z.string().optional().default(""),
   DEMO_MODE: bool,
   ALERT_JOB_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
+  /** Optional. When set, session lookups are cached in Redis for a few seconds (PostgreSQL stays the source of truth). */
+  REDIS_URL: z.string().optional().default(""),
   LOG_LEVEL: z.string().default("info"),
 });
 

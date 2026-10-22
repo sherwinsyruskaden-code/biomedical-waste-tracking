@@ -11,7 +11,8 @@ import { randomToken, sha256 } from "../lib/crypto.js";
 import { AppError, badRequest, conflict, notFound, unauthorized } from "../lib/errors.js";
 import { route, zId, zOptionalText } from "../lib/http.js";
 import { sendMail } from "../lib/mailer.js";
-import { clearSessionCookie, createSession } from "../lib/session.js";
+import { clearSessionCookie, createSession, sessionKey } from "../lib/session.js";
+import { cacheDel } from "../lib/redis.js";
 import { createOrganization, orgInput, registrationFacilityInput, registrationToFacility } from "../services/orgs.js";
 import { DEMO_ORG_NAME, demoPeople, ensureSampleData } from "../services/demo.js";
 
@@ -126,6 +127,7 @@ route(router, base, { method: "post", path: "/login", summary: "Sign in with ema
 
 route(router, base, { method: "post", path: "/logout", summary: "Sign out and invalidate the session", tag: "Auth", access: "user" }, async ({ auth, res, req }) => {
   await db.delete(sessions).where(eq(sessions.id, auth.sessionId));
+  await cacheDel(sessionKey(auth.sessionId));
   clearSessionCookie(res);
   await audit({ organizationId: auth.membership?.organizationId, actorUserId: auth.user.id, action: "auth.logout", ip: req.ip });
   return { ok: true };
@@ -170,6 +172,7 @@ route(router, base, { method: "post", path: "/switch-organization", summary: "Ch
     .where(and(eq(memberships.userId, auth.user.id), eq(memberships.organizationId, body.organizationId), eq(memberships.status, "active")));
   if (!m) throw badRequest("You are not an active member of that organization.");
   await db.update(sessions).set({ activeOrganizationId: body.organizationId }).where(eq(sessions.id, auth.sessionId));
+  await cacheDel(sessionKey(auth.sessionId));
   return { ok: true };
 });
 
@@ -177,6 +180,7 @@ route(router, base, { method: "post", path: "/create-organization", summary: "Cr
   const result = await db.transaction(async (tx) => {
     const { org, facility } = await createOrganization(tx, { org: body.organization, facility: registrationToFacility(body.facility), adminUserId: auth.user.id, contactEmail: auth.user.email });
     await tx.update(sessions).set({ activeOrganizationId: org.id }).where(eq(sessions.id, auth.sessionId));
+    await cacheDel(sessionKey(auth.sessionId));
     await audit({ organizationId: org.id, actorUserId: auth.user.id, action: "organization.create", entityType: "organization", entityId: org.id, ip: req.ip }, tx);
     return { organizationId: org.id, facilityId: facility?.id ?? null };
   });
@@ -193,7 +197,8 @@ route(router, base, { method: "post", path: "/change-password", summary: "Change
   const [u] = await db.select({ passwordHash: users.passwordHash }).from(users).where(eq(users.id, auth.user.id));
   if (!(await verifyPassword(u.passwordHash, body.currentPassword))) throw badRequest("Current password is incorrect.", { fields: { currentPassword: "Incorrect" } });
   await db.update(users).set({ passwordHash: await hashPassword(body.newPassword), updatedAt: new Date() }).where(eq(users.id, auth.user.id));
-  await db.delete(sessions).where(and(eq(sessions.userId, auth.user.id), ne(sessions.id, auth.sessionId)));
+  const gone = await db.delete(sessions).where(and(eq(sessions.userId, auth.user.id), ne(sessions.id, auth.sessionId))).returning({ id: sessions.id });
+  await cacheDel(...gone.map((g) => sessionKey(g.id)));
   await audit({ actorUserId: auth.user.id, organizationId: auth.membership?.organizationId, action: "auth.password_changed", ip: req.ip });
   return { ok: true };
 });
@@ -226,7 +231,8 @@ route(router, base, { method: "post", path: "/reset-password", summary: "Set a n
     if (!t) throw badRequest("This reset link is invalid or has expired. Request a new one.");
     await tx.update(passwordResetTokens).set({ usedAt: new Date() }).where(eq(passwordResetTokens.id, t.id));
     await tx.update(users).set({ passwordHash: await hashPassword(body.password), updatedAt: new Date() }).where(eq(users.id, t.userId));
-    await tx.delete(sessions).where(eq(sessions.userId, t.userId)); // sign out everywhere
+    const gone = await tx.delete(sessions).where(eq(sessions.userId, t.userId)).returning({ id: sessions.id }); // sign out everywhere
+    await cacheDel(...gone.map((g) => sessionKey(g.id)));
     await audit({ actorUserId: t.userId, action: "auth.password_reset", ip: req.ip }, tx);
   });
   return { ok: true };

@@ -14,7 +14,7 @@ BWTS tracks biomedical waste from the moment it is bagged on a ward until it is 
 
 **Why Drizzle?** Type-safe queries in TypeScript, plain SQL migrations, no native query engine to install. Raw SQL is still used where it is clearer (reports).
 
-**Why no Redis?** Nothing needs it: sessions and all state live in PostgreSQL, live updates fan out in-process, the alert job is a timer. Adding Redis would add a service to run without solving a problem.
+**Where is Redis used?** Only as an optional cache for the login-session lookup (`apps/api/src/lib/redis.ts`, `lib/session.ts`). Sessions and all other state stay in PostgreSQL, which is the source of truth; if `REDIS_URL` is empty or Redis is down the app runs exactly as before. Live updates stay in-process and the alert job is a timer, so nothing else needed Redis.
 
 **Why server-sent events, not WebSockets?** Updates only flow server → browser. SSE is plain HTTP, reconnects automatically, and works with cookie auth.
 

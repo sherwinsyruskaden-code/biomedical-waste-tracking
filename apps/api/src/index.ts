@@ -7,6 +7,7 @@ import { mailConfigured } from "./lib/mailer.js";
 import { startAlertJob, stopAlertJob } from "./services/alerts.js";
 import { stopSimulations } from "./routes/assignments.js";
 import { upgradeSampleData } from "./services/demo.js";
+import { closeRedis } from "./lib/redis.js";
 
 async function main() {
   // Apply pending migrations on boot so a fresh checkout "just works". Safe to run repeatedly.
@@ -27,7 +28,7 @@ async function main() {
     logger.info(`${signal} received, shutting down`);
     stopAlertJob();
     stopSimulations();
-    server.close(() => pool.end().finally(() => process.exit(0)));
+    server.close(() => closeRedis().then(() => pool.end()).finally(() => process.exit(0)));
     setTimeout(() => process.exit(0), 5000).unref();
   };
   process.on("SIGINT", () => shutdown("SIGINT"));

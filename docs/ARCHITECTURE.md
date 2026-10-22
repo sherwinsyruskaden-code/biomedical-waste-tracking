@@ -28,8 +28,8 @@ In development Vite serves the SPA on :5173 and proxies `/api` to the API on :40
 | Validation | Zod 4 | One schema validates requests **and** generates the OpenAPI document |
 | DB + ORM | PostgreSQL 16 + Drizzle ORM | Relational integrity is the point of a custody system. Drizzle is pure TypeScript (no binary engine), with plain SQL migrations |
 | Live updates | Server-sent events | One-way server→browser push is all that's needed; simpler than WebSockets |
-| Background work | `setInterval` job in the API | A queue (Redis/BullMQ) solves no current problem. All state is in PostgreSQL, so the job is idempotent |
-| Redis | **Not used** | No caching or cross-process fan-out need at this scale |
+| Background work | `setInterval` job in the API | A queue (BullMQ) solves no current problem. All state is in PostgreSQL, so the job is idempotent |
+| Redis | **Optional** (`REDIS_URL`) | Caches the session lookup for 10 s so a signed-in user's requests skip one PostgreSQL query. Cleared on logout, sign-in, org switch and password change. PostgreSQL stays the source of truth; with no Redis, or if it goes down, the app behaves exactly as before |
 | Maps | Leaflet + OpenStreetMap | Free, no API key. Tile URL is configurable |
 | Routing | Optional OSRM-compatible URL | Off by default; planned routes are clearly separated from recorded positions |
 | Passwords | Argon2id (`@node-rs/argon2`) | Current OWASP recommendation, prebuilt binaries for Windows/Linux/macOS |

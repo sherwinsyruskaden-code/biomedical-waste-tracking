@@ -1,6 +1,6 @@
 # Local services for BWTS.
 #
-#   docker compose up -d db          # just PostgreSQL (use with `npm run dev`)
+#   docker compose up -d db redis   # PostgreSQL (+ optional Redis session cache) for `npm run dev`
 #   docker compose --profile full up -d --build   # PostgreSQL + the production app on http://localhost:4000
 #
 # Database files live in the named volume "bwts-pgdata", which survives `docker compose down`
@@ -24,6 +24,17 @@ services:
       timeout: 3s
       retries: 20
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   app:
     profiles: ["full"]
     build: .
@@ -31,7 +42,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
+      REDIS_URL: redis://redis:6379
       DATABASE_URL: postgres://bwts:bwts_dev_password@db:5432/bwts
       APP_URL: http://localhost:4000
       PORT: "4000"
