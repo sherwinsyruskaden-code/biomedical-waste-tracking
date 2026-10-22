@@ -149,14 +149,23 @@ describe("the full journey: registration → collection request → transport �
   });
 
   it("the plant confirms receipt and records disposal; history shows the whole journey", async () => {
-    expect((await act(staffB, batchId, "receive", { accepted: true, receivedQuantity: 7.5, unit: "kg", condition: "intact" })).status).toBe(404);
-    expect((await act(plantStaff, batchId, "receive", { accepted: true, receivedQuantity: 7.5, unit: "kg", condition: "intact" })).status).toBe(200);
-    expect((await act(plantStaff, batchId, "dispose", { method: "incineration", treatedQuantity: 7.5, unit: "kg" })).status).toBe(200);
+    expect((await act(staffB, batchId, "receive", { accepted: true, receivedQuantity: 7.5, unit: "kg", condition: "intact", scanMethod: "qr", identifier: qr })).status).toBe(404);
+    expect((await act(plantStaff, batchId, "receive", { accepted: true, receivedQuantity: 7.5, unit: "kg", condition: "intact" })).status).toBe(400); // the plant must scan
+    expect((await act(plantStaff, batchId, "receive", { accepted: true, receivedQuantity: 7.5, unit: "kg", condition: "intact", scanMethod: "qr", identifier: qr })).status).toBe(200);
+    const disposedAt = new Date(Date.now() + 30_000).toISOString(); // after the receipt, within the allowed clock-skew
+    expect((await act(plantStaff, batchId, "dispose", { method: "incineration", treatedQuantity: 7.5, unit: "kg", disposedAt })).status).toBe(200);
+    // The origin hospital's staff and the admins are told that the waste has been disposed, with the method and the time.
+    const told = JSON.stringify((await staffA.get("/api/notifications")).body);
+    expect(told).toContain(`Disposed: ${trackingCode}`);
+    expect(told).toContain("incineration");
+    expect(JSON.stringify((await org.admin.get("/api/notifications")).body)).toContain(`Disposed: ${trackingCode}`);
+    expect(JSON.stringify((await staffB.get("/api/notifications")).body)).not.toContain(trackingCode); // another hospital is not told
     const b = (await staffA.get(`/api/batches/${batchId}`)).body;
     expect(b.status).toBe("disposed");
     expect(b.trackingCode).toBe(trackingCode);
     expect(b.events.map((e: { eventType: string }) => e.eventType)).toEqual(["created", "segregated", "assigned", "pickup", "transit_started", "handover", "received", "disposed"]);
     for (const e of b.events) expect(new Date(e.createdAt).getTime()).toBeGreaterThan(0);
     expect(b.disposal.facilityName).toBe("Green CBWTF");
+    expect(new Date(b.disposal.disposedAt).toISOString()).toBe(disposedAt); // the recorded disposal time is the one the plant entered
   });
 });

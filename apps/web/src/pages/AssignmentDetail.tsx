@@ -30,7 +30,8 @@ function SharePanel({ a, onChange }: { a: Detail; onChange: () => void }) {
   const [sharing, setSharing] = useState(a.trackingActive);
   useEffect(() => setSharing(a.trackingActive), [a.trackingActive]);
   const stop = useCallback(() => setSharing(false), []);
-  const geo = useGeoTracking(a.id, sharing, stop);
+  const routePoints = [a.origin, a.destination].filter((f) => f.latitude != null && f.longitude != null).map((f) => ({ latitude: f.latitude!, longitude: f.longitude! }));
+  const geo = useGeoTracking(a.id, sharing, stop, routePoints);
   const toggle = useMutation({
     mutationFn: (active: boolean) => api.put(`/api/assignments/${a.id}/tracking`, { active }),
     onSuccess: (_d, active) => {

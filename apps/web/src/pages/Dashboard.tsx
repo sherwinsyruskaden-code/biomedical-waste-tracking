@@ -7,6 +7,7 @@ import { Bar, BarChart, CartesianGrid, ComposedChart, Line, ResponsiveContainer,
 import { ActionDialog } from "../components/ActionDialog";
 import { Badge, Button, CategoryChip, EmptyState, ErrorState, LoadingBlock, PageHeader, Panel, Skeleton } from "../components/ui";
 import { api } from "../lib/api";
+import { useCategories } from "../lib/queries";
 import { assignmentMeta, eventLabel, fmtDateTime, fmtQty, humanize, timeAgo } from "../lib/format";
 import { CountUp } from "../components/CountUp";
 import { useActor, useWorkplace } from "../lib/session";
@@ -160,6 +161,36 @@ function PlantArrivals() {
   );
 }
 
+/** Treatment-plant staff: batches that were received and still need their disposal recorded (method and time). */
+function PlantDisposals() {
+  const [open, setOpen] = useState<BatchListItem | null>(null);
+  const categories = useCategories(); // the allowed treatment methods differ per category
+  const q = useQuery({ queryKey: ["batches", "awaiting-disposal"], queryFn: () => api.get<Paged<BatchListItem>>("/api/batches?status=received&pageSize=20&sort=oldest"), refetchInterval: 30_000 });
+  const items = q.data?.items ?? [];
+  if (!q.isLoading && items.length === 0) return null;
+  return (
+    <section aria-label="Received, awaiting disposal" className="mb-5 rounded-[18px] border-2 border-emerald-300 bg-emerald-50/50 p-5" data-testid="plant-disposals">
+      <h2 className="flex items-center gap-2 text-[18px] font-bold">Received — record disposal {items.length > 0 && <Badge tone="warn">{q.data!.total}</Badge>}</h2>
+      <p className="mt-1 text-sm text-ink-2">Once the waste has been treated, record the method and the date and time it was disposed. Everyone involved sees it on the batch and is notified.</p>
+      {q.isLoading ? <LoadingBlock rows={2} /> : (
+        <ul className="mt-3 divide-y divide-line rounded-[12px] bg-paper">
+          {items.map((b) => (
+            <li key={b.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center">
+              <div className="min-w-0 flex-1 text-sm">
+                <Link to={`/batches/${b.id}`} className="font-mono font-semibold hover:text-emerald-700">{b.trackingCode}</Link>
+                <span className="ml-2 text-ink-3">received {fmtDateTime(b.statusChangedAt)}</span>
+                <p className="text-ink-2">From {b.originName} · <span className="tabular font-semibold text-ink">{fmtQty(b.quantity, b.unit)}</span> · <CategoryChip code={b.category.code} name={b.category.name} color={b.category.colorHex} compact /></p>
+              </div>
+              <Button onClick={() => setOpen(b)}>Record disposal</Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && <ActionDialog open action="dispose" target={{ id: open.id, trackingCode: open.trackingCode, quantity: open.quantity, unit: open.unit, destinationFacilityId: open.destinationFacilityId, category: categories.data?.find((c) => c.id === open.category.id) }} onOpenChange={(o) => !o && setOpen(null)} />}
+    </section>
+  );
+}
+
 function TransporterHome() {
   const jobs = useQuery({ queryKey: ["assignments", "mine-active"], queryFn: () => api.get<Paged<{ id: string; reference: string; status: AssignmentStatus; originName: string; destinationName: string; dueBy: string; batchCount: number; trackingActive: boolean; scheduledPickupAt: string }>>("/api/assignments?status=assigned,accepted,in_progress&pageSize=50") });
   const { me } = useActor();
@@ -219,6 +250,7 @@ export default function Dashboard() {
         }
       />
       {atPlant && !isAdmin && <PlantArrivals />}
+      {atPlant && !isAdmin && <PlantDisposals />}
       {isAdmin && <SetupChecklist />}
       {q.isError ? (
         <ErrorState error={q.error} onRetry={() => q.refetch()} />

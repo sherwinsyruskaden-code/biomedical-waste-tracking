@@ -107,6 +107,9 @@ await check("only the plant's own arrivals are listed, and Confirm Receipt updat
   const target = before[0];
   await plant.getByTestId("plant-arrivals").getByRole("button", { name: "Confirm Receipt" }).first().click();
   const d = plant.getByRole("dialog");
+  await d.getByTestId("receipt-scan").waitFor(); // the plant must scan the batch's QR before it can confirm
+  await d.getByLabel("Batch", { exact: true }).selectOption({ label: `${target.trackingCode} · delivered` });
+  await d.getByRole("button", { name: "Use this batch's QR" }).click();
   await d.getByLabel("Weighed quantity").fill(String(target.quantity));
   await d.getByRole("button", { name: "Confirm receipt" }).click();
   await plant.getByText("Receipt recorded", { exact: true }).first().waitFor();

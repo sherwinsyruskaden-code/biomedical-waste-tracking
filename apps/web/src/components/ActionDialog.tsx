@@ -88,6 +88,11 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone, initi
   const [dest, setDest] = useState("");
   const tz = useOrgTimezone();
   const [dueBy, setDueBy] = useState(() => isoToWall(Date.now() + 3 * 3600_000, tz));
+  const [simScan, setSimScan] = useState(false);
+  const [disposedAt, setDisposedAt] = useState(() => isoToWall(Date.now(), tz));
+  const [disposedTouched, setDisposedTouched] = useState(false); // untouched = "now", stamped by the server to the second
+  const isSim = !!simulated || simScan;
+  const disposeError = action === "dispose" ? wallIssue(disposedAt, tz, Date.now() - 90 * 86400_000, Date.now() + 120_000) : null;
   const rw = rerouteWindow();
   const dueError = action === "reroute" ? wallIssue(dueBy, tz, rw.min, rw.max) : null;
 
@@ -105,8 +110,8 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone, initi
           if (p) body = { ...body, ...p };
         }
       }
-      if (action === "receive") body = { accepted, receivedQuantity: Number(qty), unit, condition, notes: notes || undefined, ...(simulated ? {} : scanFields), ...(simulated ? { simulatedScan: true } : {}) };
-      if (action === "dispose") body = { method, treatedQuantity: qty ? Number(qty) : undefined, unit, documentRef: docRef || undefined, notes: notes || undefined };
+      if (action === "receive") body = { accepted, receivedQuantity: Number(qty), unit, condition, notes: notes || undefined, ...(isSim ? { simulatedScan: true } : scanFields) };
+      if (action === "dispose") body = { method, treatedQuantity: qty ? Number(qty) : undefined, unit, documentRef: docRef || undefined, notes: notes || undefined, ...(disposedTouched ? { disposedAt: wallToIso(disposedAt, tz) } : {}) };
       if (action === "reroute") body = { destinationFacilityId: dest, dueBy: wallToIso(dueBy, tz), notes: notes || undefined };
       return api.post<{ status: BatchStatus; replayed: boolean }>(`/api/batches/${target.id}/actions/${action}`, body, { "Idempotency-Key": key });
     },
@@ -124,6 +129,8 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone, initi
     (action !== "cancel" || notes.trim().length >= 3) &&
     (!needsScan || !!scan || (noScan && notes.trim().length > 0)) &&
     (action !== "receive" || (accepted || notes.trim().length > 0)) &&
+    (action !== "receive" || !!scan || isSim) &&
+    (action !== "dispose" || (!!disposedAt && !disposeError)) &&
     (action !== "reroute" || (!!dest && !dueError));
 
   return (
@@ -158,9 +165,17 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone, initi
                 </button>
               ))}
             </div>
-            <p className="text-[13px] font-medium" data-testid="receipt-source">
-              {simulated ? <span className="text-amber-900">Simulated scan of this batch's QR (sample organization): recorded as simulated.</span> : scan ? <span className="text-emerald-800">QR label scanned: recorded with this receipt.</span> : <span className="text-ink-3">Selected from the arrivals list: recorded without a scan.</span>}
-            </p>
+            {isSim || scan ? (
+              <p className="text-[13px] font-medium" data-testid="receipt-source">
+                {isSim ? <span className="text-amber-900">Simulated scan of this batch's QR (sample organization): recorded as simulated.</span> : <span className="text-emerald-800">QR label scanned: recorded with this receipt.</span>}
+              </p>
+            ) : (
+              <div className="flex flex-col gap-2" data-testid="receipt-scan">
+                <p className="text-sm font-semibold">Scan the batch's QR code to confirm receipt</p>
+                <p className="text-[13px] text-ink-3">The plant must scan the label with its own account. Receipt cannot be recorded without it.</p>
+                <Scanner onResult={(r) => (r.source === "simulated" ? setSimScan(true) : setScan(r))} />
+              </div>
+            )}
             <div className="grid gap-3 sm:grid-cols-3">
               <Field label="Weighed quantity" htmlFor="rq" error={fieldError(m.error, "receivedQuantity")}>
                 <Input id="rq" type="number" min="0" step="0.01" value={qty} onChange={(e) => setQty(e.target.value)} />
@@ -188,6 +203,9 @@ export function ActionDialog({ action, target, open, onOpenChange, onDone, initi
             </Field>
             <Field label="Plant log / document reference" htmlFor="dr" hint="From your own treatment records.">
               <Input id="dr" value={docRef} onChange={(e) => setDocRef(e.target.value)} placeholder="e.g. INC-2026-1042" />
+            </Field>
+            <Field label="Disposed on (date and time)" htmlFor="dt" hint={`Organization time (${tz}). Defaults to now.`} error={disposeError ?? fieldError(m.error, "disposedAt")}>
+              <Input id="dt" type="datetime-local" max={isoToWall(Date.now(), tz)} aria-invalid={!!disposeError || undefined} value={disposedAt} onChange={(e) => { setDisposedAt(e.target.value); setDisposedTouched(true); }} />
             </Field>
             <Field label="Treated quantity" htmlFor="dq">
               <Input id="dq" type="number" min="0" step="0.01" value={qty} onChange={(e) => setQty(e.target.value)} />

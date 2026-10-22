@@ -11,7 +11,14 @@ import { addMember, signupOrg, type Client } from "./helpers.js";
 let org: Awaited<ReturnType<typeof signupOrg>>;
 let staff: Client, staffB: Client, plant: Client, plant2: Client;
 let plant2Id: string, hospitalBId: string;
-const act = (c: Client, id: string, action: string, body: object = {}) => c.post(`/api/batches/${id}/actions/${action}`, body);
+// Receipt at the plant now requires a scan of the batch's QR, so tests attach it unless they say otherwise.
+const act = async (c: Client, id: string, action: string, body: object = {}) => {
+  if (action === "receive" && !("scanMethod" in body)) {
+    const qr = (await org.admin.get(`/api/batches/${id}/labels`)).body.labels?.[0]?.payload;
+    body = { ...body, scanMethod: "qr", identifier: qr };
+  }
+  return c.post(`/api/batches/${id}/actions/${action}`, body);
+};
 const ACTIVE = ["assigned", "accepted", "in_progress"] as const;
 
 beforeAll(async () => {

@@ -23,6 +23,14 @@ export interface MapVehicle {
 const tileUrl = import.meta.env.VITE_MAP_TILE_URL || "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 const attribution = import.meta.env.VITE_MAP_ATTRIBUTION || "&copy; OpenStreetMap contributors";
 
+/** Points farther than this from every facility are drawn but not used to frame the map (a stray fix must not zoom the map out to the world). */
+const NEAR_KM = 300;
+function kmBetween(a: [number, number], b: [number, number]) {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const h = Math.sin(toRad(b[0] - a[0]) / 2) ** 2 + Math.cos(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.sin(toRad(b[1] - a[1]) / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
+}
+
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 function facilityIcon(type: string) {
@@ -82,14 +90,16 @@ export function TrackingMap({
     () => [...facs.map((f) => [f.latitude!, f.longitude!] as [number, number]), ...vehicles.map((v) => [v.point.latitude, v.point.longitude] as [number, number]), ...(history ?? []).map((p) => [p.latitude, p.longitude] as [number, number])],
     [facs, vehicles, history],
   );
-  const center: [number, number] = allPoints[0] ?? [12.9716, 80.0];
+  const facPoints = allPoints.slice(0, facs.length);
+  const framePoints = facPoints.length ? allPoints.filter((p, i) => i < facs.length || facPoints.some((f) => kmBetween(f, p) <= NEAR_KM)) : allPoints;
+  const center: [number, number] = framePoints[0] ?? [12.9716, 80.0];
   const key = fitKey ?? `${facs.map((f) => f.id).join()}|${vehicles.map((v) => v.assignmentId).join()}`;
   const deviceHistory = (history ?? []).filter((p) => p.source === "device");
   const simHistory = (history ?? []).filter((p) => p.source === "simulated");
   return (
     <MapContainer center={center} zoom={12} scrollWheelZoom className={className ?? "h-[520px] w-full rounded-[16px]"} attributionControl>
       <TileLayer url={tileUrl} attribution={attribution} maxZoom={19} />
-      <FitBounds points={allPoints} fitKey={key} />
+      <FitBounds points={framePoints} fitKey={key} />
       {plannedRoute && plannedRoute.length > 1 && <Polyline positions={plannedRoute} pathOptions={{ color: "#6b7a72", weight: 4, opacity: 0.7, dashArray: "8 10" }} />}
       {deviceHistory.length > 1 && <Polyline positions={deviceHistory.map((p) => [p.latitude, p.longitude] as [number, number])} pathOptions={{ color: "#0891b2", weight: 5, opacity: 0.85 }} />}
       {simHistory.length > 1 && <Polyline positions={simHistory.map((p) => [p.latitude, p.longitude] as [number, number])} pathOptions={{ color: "#d97706", weight: 4, opacity: 0.85, dashArray: "2 8" }} />}

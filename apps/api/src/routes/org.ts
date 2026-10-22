@@ -22,7 +22,8 @@ import { randomToken, sha256 } from "../lib/crypto.js";
 import { badRequest, conflict, forbidden, notFound } from "../lib/errors.js";
 import { actorOf, route, zId, zOptionalText, zPage, type Actor } from "../lib/http.js";
 import { mailConfigured, sendMail } from "../lib/mailer.js";
-import { createSession } from "../lib/session.js";
+import { createSession, sessionKey } from "../lib/session.js";
+import { cacheDel } from "../lib/redis.js";
 import { assertFacilitiesInOrg, facilityInput } from "../services/orgs.js";
 import { orgSettingsSchema, readSettings } from "../services/settings.js";
 import { hashPassword, zEmail, zPassword } from "./auth.js";
@@ -263,7 +264,8 @@ route(router, base, {
     if (b.facilityIds.length) await tx.insert(membershipFacilities).values(b.facilityIds.map((facilityId) => ({ membershipId: m.id, facilityId })));
     if (b.status === "disabled") {
       // A disabled member loses access to this organization immediately.
-      await tx.update(sessions).set({ activeOrganizationId: null }).where(and(eq(sessions.userId, m.userId), eq(sessions.activeOrganizationId, a.orgId)));
+      const cleared = await tx.update(sessions).set({ activeOrganizationId: null }).where(and(eq(sessions.userId, m.userId), eq(sessions.activeOrganizationId, a.orgId))).returning({ id: sessions.id });
+      await cacheDel(...cleared.map((c) => sessionKey(c.id)));
     }
     await audit({ organizationId: a.orgId, actorUserId: a.userId, action: "member.update", entityType: "membership", entityId: m.id, metadata: { role: b.role, status: b.status, facilityIds: b.facilityIds }, ip: a.ip }, tx);
   });
@@ -384,7 +386,10 @@ route(router, base, {
     await tx.update(invitations).set({ acceptedAt: new Date() }).where(eq(invitations.id, inv.id));
     await audit({ organizationId: inv.organizationId, actorUserId: user.id, action: "invitation.accept", entityType: "membership", entityId: m.id, ip: ctx.req.ip }, tx);
     // Reuse the session only if it already belongs to the invitee; otherwise sign in as the invitee.
-    if (ctx.req.auth?.user.id === user.id) await tx.update(sessions).set({ activeOrganizationId: inv.organizationId }).where(eq(sessions.id, ctx.req.auth.sessionId));
+    if (ctx.req.auth?.user.id === user.id) {
+      await tx.update(sessions).set({ activeOrganizationId: inv.organizationId }).where(eq(sessions.id, ctx.req.auth.sessionId));
+      await cacheDel(sessionKey(ctx.req.auth.sessionId));
+    }
     else await createSession(ctx.res, ctx.req, user.id, inv.organizationId, tx);
     return { organizationId: inv.organizationId };
   }).catch((e) => {

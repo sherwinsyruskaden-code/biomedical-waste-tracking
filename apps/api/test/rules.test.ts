@@ -133,7 +133,7 @@ describe("arrival and receipt belong to the right people", () => {
     expect((await driver.c.post(`/api/batches/${b.id}/actions/pickup`, { scanMethod: "qr", identifier: qr })).status).toBe(200);
     expect((await driver.c.post(`/api/assignments/${job.id}/start`)).status).toBe(200);
     // Not yet arrived: nobody can receive; only the transporter may record arrival.
-    const receipt = { accepted: true, receivedQuantity: 9, unit: "kg", condition: "intact" };
+    const receipt = { accepted: true, receivedQuantity: 9, unit: "kg", condition: "intact", scanMethod: "qr", identifier: qr };
     expect((await plant.post(`/api/batches/${b.id}/actions/receive`, receipt)).status).toBe(422);
     expect((await org.admin.post(`/api/batches/${b.id}/actions/handover`, { scanMethod: "qr", identifier: qr })).status).toBe(422);
     expect((await plant.post(`/api/batches/${b.id}/actions/handover`, { scanMethod: "qr", identifier: qr })).status).toBe(422);

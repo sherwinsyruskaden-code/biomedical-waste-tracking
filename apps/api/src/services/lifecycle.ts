@@ -333,7 +333,9 @@ export async function performAction(
         }
         case "receive": {
           const b = body as unknown as z.infer<typeof actionBodies.receive>;
-          event.containerId = b.scanMethod !== "manual" ? await verifyScan(tx, batch, b.scanMethod, b.identifier) : null;
+          // The treatment plant must scan the batch's QR with its own account before receipt can be recorded.
+          if (b.scanMethod === "manual") throw badRequest("Scan the batch's QR code to confirm receipt. Receipt cannot be recorded without a scan.", { fields: { identifier: "Scan the batch QR" } });
+          event.containerId = await verifyScan(tx, batch, b.scanMethod, b.identifier);
           if (!b.accepted && !b.notes) throw badRequest("Explain why the delivery is being rejected.");
           eventType = b.accepted ? "received" : "rejected";
           event.facilityId = batch.destinationFacilityId;
@@ -404,7 +406,18 @@ export async function performAction(
           });
           eventType = "disposed";
           event.facilityId = dest.id;
-          event.details = { method: b.method, documentRef: b.documentRef ?? null };
+          event.details = { method: b.method, documentRef: b.documentRef ?? null, disposedAt: (b.disposedAt ?? now).toISOString() };
+          afterCommit.push(async () => {
+            const tz = await orgTimezone(actor.orgId);
+            const when = (b.disposedAt ?? now).toLocaleString("en-IN", { timeZone: tz, dateStyle: "medium", timeStyle: "short" });
+            // The hospital that generated the waste (and the organization admins) learn that it has been destroyed.
+            await notify(db, actor.orgId, { facilityStaffAt: [batch.originFacilityId], admins: true }, {
+              kind: "disposed",
+              title: `Disposed: ${batch.trackingCode}`,
+              body: `Treated by ${b.method.replaceAll("_", " ")} at ${dest.name} on ${when}. The record is complete.`,
+              link: `/batches/${batch.id}`,
+            });
+          });
           patch.currentCustodianFacilityId = null;
           patch.currentCustodianUserId = null;
           break;

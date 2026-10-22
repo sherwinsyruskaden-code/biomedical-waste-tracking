@@ -213,8 +213,10 @@ describe("end-to-end waste lifecycle", () => {
     await act(driver, b.id, "pickup", { scanMethod: "manual", notes: "manual" });
     await driver.post(`/api/assignments/${asg.id}/start`);
     await act(driver, b.id, "handover", { scanMethod: "manual", notes: "manual" });
-    expect((await act(plantStaff, b.id, "receive", { accepted: false, receivedQuantity: 4, unit: "kg", condition: "leaking" })).status).toBe(400); // reason required
-    const rej = await act(plantStaff, b.id, "receive", { accepted: false, receivedQuantity: 4, unit: "kg", condition: "leaking", notes: "Bag leaking, weight mismatch" });
+    const qrB = (await admin.get(`/api/batches/${b.id}/labels`)).body.labels[0].payload;
+    expect((await act(plantStaff, b.id, "receive", { accepted: false, receivedQuantity: 4, unit: "kg", condition: "leaking", scanMethod: "qr", identifier: qrB })).status).toBe(400); // reason required
+    expect((await act(plantStaff, b.id, "receive", { accepted: true, receivedQuantity: 4, unit: "kg", condition: "intact" })).status).toBe(400); // no scan, no receipt
+    const rej = await act(plantStaff, b.id, "receive", { accepted: false, receivedQuantity: 4, unit: "kg", condition: "leaking", notes: "Bag leaking, weight mismatch", scanMethod: "qr", identifier: qrB });
     expect(rej.status).toBe(200);
     expect(rej.body.status).toBe("rejected");
     // Alerts and incidents are switched off: their endpoints are gone and nothing new is recorded.

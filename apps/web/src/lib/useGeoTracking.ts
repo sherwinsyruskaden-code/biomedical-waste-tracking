@@ -15,6 +15,15 @@ export type GeoState = "off" | "starting" | "active" | "denied" | "unavailable" 
 const MIN_INTERVAL_MS = 15_000; // at most one stored fix per 15 s while stationary…
 const MIN_DISTANCE_M = 30; // …or sooner if the vehicle moved this far
 const FLUSH_EVERY_MS = 10_000;
+/** A fix coarser than this is a network/IP guess, not GPS (laptops often report a city or even another country). */
+const MAX_ACCURACY_M = 1000;
+/** A fix farther than this from both ends of the route is treated as a wrong device location. */
+const MAX_FROM_ROUTE_KM = 300;
+
+export interface RoutePoint {
+  latitude: number;
+  longitude: number;
+}
 
 function distanceM(a: GeoFix, b: GeoFix) {
   const R = 6371000;
@@ -31,7 +40,7 @@ function distanceM(a: GeoFix, b: GeoFix) {
  * - Throttles by time/distance to save battery and data.
  * - Queues fixes during network loss and retries.
  */
-export function useGeoTracking(assignmentId: string, enabled: boolean, onServerStop?: () => void) {
+export function useGeoTracking(assignmentId: string, enabled: boolean, onServerStop?: () => void, route: RoutePoint[] = []) {
   const [state, setState] = useState<GeoState>("off");
   const [lastFix, setLastFix] = useState<GeoFix | null>(null);
   const [lastSentAt, setLastSentAt] = useState<Date | null>(null);
@@ -95,6 +104,21 @@ export function useGeoTracking(assignmentId: string, enabled: boolean, onServerS
           speed: p.coords.speed != null && !Number.isNaN(p.coords.speed) ? p.coords.speed : null,
           recordedAt: new Date(p.timestamp).toISOString(),
         };
+        // Do not use a coarse (IP/Wi-Fi guess) fix, or one that is nowhere near the route: it would put the truck on the wrong continent.
+        if (fix.accuracy != null && fix.accuracy > MAX_ACCURACY_M) {
+          setState("starting");
+          setMessage(`Waiting for a precise GPS fix: this device only reports its position to about ${Math.round(fix.accuracy)} m. Turn on precise location, or use a phone.`);
+          return;
+        }
+        if (route.length > 0) {
+          const km = Math.min(...route.map((r) => distanceM(fix, { ...fix, latitude: r.latitude, longitude: r.longitude }) / 1000));
+          if (km > MAX_FROM_ROUTE_KM) {
+            setState("error");
+            setMessage(`This device reports a location about ${Math.round(km)} km from the route, which looks wrong (a VPN or a computer's approximate location). It was not shared. Check your location settings, or use a phone near the route.`);
+            return;
+          }
+        }
+        setMessage(null);
         setState("active");
         setLastFix(fix);
         const prev = lastStored.current;
@@ -137,7 +161,8 @@ export function useGeoTracking(assignmentId: string, enabled: boolean, onServerS
       wakeLock.current = null;
       lastStored.current = null;
     };
-  }, [enabled, flush]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, flush, route.map((r) => `${r.latitude},${r.longitude}`).join("|")]);
 
   return { state, lastFix, lastSentAt, queued, message };
 }
