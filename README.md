@@ -154,6 +154,8 @@ Every container has a QR label (`APP_URL/s/<token>`; the token is random and car
 
 ## 9. Deploying
 
+**One-click on Render:** `render.yaml` in this repository is a Render Blueprint. In the Render dashboard choose **New → Blueprint**, pick this repository and press **Apply**: it creates a free PostgreSQL database and a Docker web service, runs the migrations on first start and gives you a public https link. `APP_URL` is taken from Render's `RENDER_EXTERNAL_URL`, `DEMO_MODE=true` keeps the one-click role buttons (set it to `false` for real use) and Redis is not needed. The Docker image was built and started locally with this configuration and answered the health check, the web app and a sample sign-in.
+
 Single container: `docker compose --profile full up -d --build` runs PostgreSQL + the app on port 4000. For a public deployment use any host that runs a Node container plus managed PostgreSQL (Render, Railway, Fly.io, a VPS…), put it behind HTTPS, set `COOKIE_SECURE=true`, `APP_URL=https://your-domain`, `DEMO_MODE=false` and real SMTP settings. This repository has **not** been deployed online; Docker files were written but could not be run in the build environment (see Known limitations).
 
 ## 10. Known limitations

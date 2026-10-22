@@ -8,7 +8,8 @@ const bool = z
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
-  APP_URL: z.string().url().default("http://localhost:5173"),
+  // On Render, RENDER_EXTERNAL_URL is the public https address of this service, so APP_URL need not be set by hand.
+  APP_URL: z.string().url().default(process.env.RENDER_EXTERNAL_URL ?? "http://localhost:5173"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   SESSION_TTL_HOURS: z.coerce.number().int().positive().default(168),
   COOKIE_SECURE: bool,
